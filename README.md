@@ -20,7 +20,9 @@
 │                                        [图标] 硬盘: Samsung SSD 970 EVO Plus 1TB
 │                                               容量: 932 GB    格式: GPT    类型: NVME
 │                                        [图标] 网卡: Realtek 8852BE Wireless LAN WiFi 6 PCI-E NIC
-│                                               类型: 无线
+│                                               类型: 无线    MAC: E0-0A-F6-A2-BC-61
+│                                               IP: 192.168.31.30    速率: 1.2 Gbps
+│                                               SSID: Xiaomi_2L_5G    网关: 192.168.31.1
 └ 图标区
 ```
 
@@ -33,7 +35,7 @@
 - **托盘图标**：右键或双击托盘图标打开菜单（刷新 / 退出）；面板本身不再响应鼠标。
 - **自动刷新**：设备增删（`WM_DEVICECHANGE`）、壁纸切换、分辨率/DPI 变化都会自动重建信息。
 - **显卡识别**：SetupAPI 枚举显示设备，按 `VEN_DEV` 查内嵌 PCI ID 表。PE 里只有 Microsoft 基础显示驱动时也能识别真实显卡型号；自动过滤虚拟显示器。
-- **网卡识别**：按 `VEN_DEV` 查表，区分 **无线 / 有线**（`CC_0280` + 名称关键词），过滤虚拟网卡、WAN Miniport、蓝牙 PAN 等。
+- **网卡识别**：按 `VEN_DEV` 查表，区分 **无线 / 有线**（`CC_0280` + 名称关键词），过滤虚拟网卡、WAN Miniport、蓝牙 PAN 等；显示 MAC、链路速率、IP、SSID、网关。
 - **零第三方依赖**：不使用 WMI、PowerShell、`msinfo32`、`wmic`，不释放任何临时文件。
 - **单文件源码**：`hspec.cpp` 一个翻译单元；资源为图标、字体子集、manifest 和版本信息。
 - **多架构**：x64 / x86 / arm64，GitHub Actions 全量编译。
@@ -56,7 +58,7 @@
 | 容量 | 物理磁盘 | `IOCTL_DISK_GET_DRIVE_GEOMETRY_EX`（免管理员） |
 | 分区格式 | 物理磁盘 | `IOCTL_DISK_GET_DRIVE_LAYOUT_EX` → MBR / GPT / RAW |
 | 显卡 | SetupAPI + 内嵌 PCI ID 表 | `SetupDiGetClassDevs` 显示类，`VEN_DEV` 查表；驱动不可用时仍可识别 |
-| 网卡 | SetupAPI + 内嵌 PCI ID 表 | `SetupDiGetClassDevs` 网络类，`VEN_DEV` 查表；`CC_0280`/名称关键词区分无线与有线 |
+| 网卡 | SetupAPI + IPHLPAPI + WLAN API | `SetupDiGetClassDevs` 网络类 + `VEN_DEV` 查表；`GetAdaptersAddresses` 取 MAC/IP/速率/网关，`WlanQueryInterface` 取 SSID |
 
 > 程序以 `requireAdministrator` 启动（读取 UEFI `db` 证书需要管理员权限）。证书行紧跟在“启动”后面：2023 与 2011 都存在时显示 `PCA 2011/CA 2023`，否则显示实际存在的那个；固件变量不可读时用 Windows 的 CA servicing 状态兜底。
 >

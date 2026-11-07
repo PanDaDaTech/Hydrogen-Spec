@@ -6,9 +6,12 @@
 #define UNICODE
 #define _UNICODE
 #include <windows.h>
+#include <winsock2.h>
 #include <windowsx.h>
 #include <winioctl.h>
 #include <setupapi.h>
+#include <iphlpapi.h>
+#include <wlanapi.h>
 #include <wincrypt.h>
 #include <objbase.h>
 #include <propidl.h>
@@ -29,6 +32,8 @@
 #pragma comment(lib, "advapi32.lib")
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "setupapi.lib")
+#pragma comment(lib, "iphlpapi.lib")
+#pragma comment(lib, "ole32.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 
@@ -985,13 +990,196 @@ static int EnumGpus(GpuInfo* out, int cap)
     return n;
 }
 
-struct NicInfo { wchar_t name[192]; bool wireless; };
+struct NicInfo {
+    wchar_t name[192];
+    wchar_t guid[64];
+    wchar_t mac[32];
+    wchar_t ip[64];
+    wchar_t gateway[64];
+    wchar_t ssid[64];
+    unsigned long long speedBps;
+    bool wireless;
+    bool connected;
+};
 
 static bool NameHasAny(const wchar_t* s, const wchar_t* const* words, int n)
 {
     for (int i = 0; i < n; i++)
         if (FindNoCase((wchar_t*)s, words[i])) return true;
     return false;
+}
+
+static void FormatMac(const BYTE* p, int n, wchar_t* out, int cap)
+{
+    out[0] = 0;
+    if (!p || n <= 0 || n > 8) return;
+    wchar_t buf[32] = { 0 };
+    int pos = 0;
+    for (int i = 0; i < n; i++) {
+        int w = (i == 0)
+            ? _snwprintf_s(buf + pos, 32 - pos, _TRUNCATE, L"%02X", p[i])
+            : _snwprintf_s(buf + pos, 32 - pos, _TRUNCATE, L"-%02X", p[i]);
+        if (w < 0) break;
+        pos += w;
+    }
+    wcsncpy_s(out, (size_t)cap, buf, _TRUNCATE);
+}
+
+static void FormatIpv4(const SOCKADDR* sa, wchar_t* out, int cap)
+{
+    out[0] = 0;
+    if (!sa || sa->sa_family != AF_INET) return;
+    const SOCKADDR_IN* sin = (const SOCKADDR_IN*)sa;
+    const BYTE* b = (const BYTE*)&sin->sin_addr;
+    WPrintf(out, (size_t)cap, L"%u.%u.%u.%u", b[0], b[1], b[2], b[3]);
+}
+
+static void FormatSpeed(unsigned long long bps, wchar_t* out, int cap)
+{
+    out[0] = 0;
+    if (bps >= 1000000000ULL)
+        WPrintf(out, (size_t)cap, L"%.1f Gbps", (double)bps / 1000000000.0);
+    else if (bps >= 1000000ULL)
+        WPrintf(out, (size_t)cap, L"%.1f Mbps", (double)bps / 1000000.0);
+    else if (bps >= 1000ULL)
+        WPrintf(out, (size_t)cap, L"%.1f Kbps", (double)bps / 1000.0);
+}
+
+static void FillNicNetwork(NicInfo* nics, int count)
+{
+    const ULONG flags = GAA_FLAG_INCLUDE_GATEWAYS | GAA_FLAG_SKIP_ANYCAST |
+        GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    ULONG size = 0;
+    ULONG rc = GetAdaptersAddresses(AF_UNSPEC, flags, NULL, NULL, &size);
+    if (rc != ERROR_BUFFER_OVERFLOW && rc != NO_ERROR) return;
+    IP_ADAPTER_ADDRESSES* addrs = (IP_ADAPTER_ADDRESSES*)malloc(size);
+    if (!addrs) return;
+    if (GetAdaptersAddresses(AF_UNSPEC, flags, NULL, addrs, &size) != NO_ERROR) {
+        free(addrs);
+        return;
+    }
+
+    for (IP_ADAPTER_ADDRESSES* a = addrs; a; a = a->Next) {
+        wchar_t aguid[128] = { 0 };
+        if (a->AdapterName)
+            MultiByteToWideChar(CP_ACP, 0, a->AdapterName, -1, aguid, 128);
+
+        for (int i = 0; i < count; i++) {
+            NicInfo& n = nics[i];
+            if (!n.guid[0] || _wcsicmp(n.guid, aguid) != 0) continue;
+
+            if (a->PhysicalAddressLength > 0 && a->PhysicalAddressLength <= 8)
+                FormatMac(a->PhysicalAddress, (int)a->PhysicalAddressLength, n.mac, 32);
+            if (a->TransmitLinkSpeed > n.speedBps)
+                n.speedBps = a->TransmitLinkSpeed;
+
+            for (IP_ADAPTER_UNICAST_ADDRESS* u = a->FirstUnicastAddress; u; u = u->Next) {
+                if (!u->Address.lpSockaddr ||
+                    u->Address.lpSockaddr->sa_family != AF_INET) continue;
+                wchar_t ip[64] = { 0 };
+                FormatIpv4(u->Address.lpSockaddr, ip, 64);
+                if (!ip[0]) continue;
+                bool linkLocal = wcsncmp(ip, L"169.254.", 8) == 0;
+                bool haveLinkLocal = wcsncmp(n.ip, L"169.254.", 8) == 0;
+                if (!n.ip[0] || (haveLinkLocal && !linkLocal))
+                    wcsncpy_s(n.ip, 64, ip, _TRUNCATE);
+            }
+            for (IP_ADAPTER_GATEWAY_ADDRESS* g = a->FirstGatewayAddress; g; g = g->Next) {
+                if (!g->Address.lpSockaddr ||
+                    g->Address.lpSockaddr->sa_family != AF_INET) continue;
+                FormatIpv4(g->Address.lpSockaddr, n.gateway, 64);
+                if (n.gateway[0]) break;
+            }
+            if (a->IfType == IF_TYPE_IEEE80211) n.wireless = true;
+            if (a->OperStatus == IfOperStatusUp) n.connected = true;
+            break;
+        }
+    }
+    free(addrs);
+}
+
+static void FillNicSsids(NicInfo* nics, int count)
+{
+    HMODULE lib = LoadLibraryW(L"wlanapi.dll");
+    if (!lib) return;
+    typedef DWORD (WINAPI *PFN_OPEN)(DWORD, PVOID, PDWORD, PHANDLE);
+    typedef DWORD (WINAPI *PFN_ENUM)(HANDLE, PVOID, PWLAN_INTERFACE_INFO_LIST*);
+    typedef DWORD (WINAPI *PFN_QUERY)(HANDLE, const GUID*, WLAN_INTF_OPCODE,
+        PVOID, PDWORD, PVOID*, PWLAN_OPCODE_VALUE_TYPE);
+    typedef VOID (WINAPI *PFN_FREE)(PVOID);
+    typedef DWORD (WINAPI *PFN_CLOSE)(HANDLE, PVOID);
+
+    PFN_OPEN open = (PFN_OPEN)GetProcAddress(lib, "WlanOpenHandle");
+    PFN_ENUM enumerate = (PFN_ENUM)GetProcAddress(lib, "WlanEnumInterfaces");
+    PFN_QUERY query = (PFN_QUERY)GetProcAddress(lib, "WlanQueryInterface");
+    PFN_FREE freeMem = (PFN_FREE)GetProcAddress(lib, "WlanFreeMemory");
+    PFN_CLOSE close = (PFN_CLOSE)GetProcAddress(lib, "WlanCloseHandle");
+    if (!open || !enumerate || !query || !freeMem || !close) {
+        FreeLibrary(lib);
+        return;
+    }
+
+    HANDLE h = NULL;
+    DWORD ver = 0;
+    if (open(2, NULL, &ver, &h) != ERROR_SUCCESS) {
+        FreeLibrary(lib);
+        return;
+    }
+
+    PWLAN_INTERFACE_INFO_LIST list = NULL;
+    if (enumerate(h, NULL, &list) == ERROR_SUCCESS && list) {
+        for (DWORD i = 0; i < list->dwNumberOfItems; i++) {
+            WLAN_INTERFACE_INFO* ii = &list->InterfaceInfo[i];
+            if (ii->isState != wlan_interface_state_connected) continue;
+
+            PVOID data = NULL;
+            DWORD sz = 0;
+            WLAN_OPCODE_VALUE_TYPE vt;
+            if (query(h, &ii->InterfaceGuid, wlan_intf_opcode_current_connection,
+                    NULL, &sz, &data, &vt) != ERROR_SUCCESS || !data)
+                continue;
+
+            WLAN_CONNECTION_ATTRIBUTES* ca = (WLAN_CONNECTION_ATTRIBUTES*)data;
+            DWORD n = ca->wlanAssociationAttributes.dot11Ssid.uSSIDLength;
+            if (n > 0 && n <= 32) {
+                char ssid[33];
+                memcpy(ssid, ca->wlanAssociationAttributes.dot11Ssid.ucSSID, n);
+                ssid[n] = 0;
+                wchar_t wssid[64] = { 0 };
+                if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, ssid, -1,
+                        wssid, 64) <= 0)
+                    MultiByteToWideChar(CP_ACP, 0, ssid, -1, wssid, 64);
+                wchar_t gs[64] = { 0 };
+                StringFromGUID2(ii->InterfaceGuid, gs, 64);
+                for (int k = 0; k < count; k++) {
+                    if (nics[k].guid[0] && _wcsicmp(nics[k].guid, gs) == 0) {
+                        wcsncpy_s(nics[k].ssid, 64, wssid, _TRUNCATE);
+                        break;
+                    }
+                }
+            }
+            freeMem(data);
+        }
+        freeMem(list);
+    }
+    close(h, NULL);
+    FreeLibrary(lib);
+}
+
+static void SortNics(NicInfo* nics, int n)
+{
+    for (int i = 1; i < n; i++) {
+        NicInfo tmp = nics[i];
+        int score = (tmp.connected ? 0 : 2) + (tmp.wireless ? 0 : 1);
+        int j = i - 1;
+        while (j >= 0) {
+            int sj = (nics[j].connected ? 0 : 2) + (nics[j].wireless ? 0 : 1);
+            if (sj <= score) break;
+            nics[j + 1] = nics[j];
+            j--;
+        }
+        nics[j + 1] = tmp;
+    }
 }
 
 static int EnumNics(NicInfo* out, int cap)
@@ -1041,12 +1229,27 @@ static int EnumNics(NicInfo* out, int cap)
         }
         if (dup) continue;
 
+        memset(&out[n], 0, sizeof(out[n]));
         wcsncpy_s(out[n].name, 192, name, _TRUNCATE);
         out[n].wireless = wireless;
+
+        HKEY devKey = SetupDiOpenDevRegKey(devs, &data, DICS_FLAG_GLOBAL, 0,
+            DIREG_DRV, KEY_READ);
+        if (devKey != INVALID_HANDLE_VALUE) {
+            DWORD type = 0, sz = sizeof(out[n].guid);
+            if (RegQueryValueExW(devKey, L"NetCfgInstanceId", NULL, &type,
+                    (LPBYTE)out[n].guid, &sz) == ERROR_SUCCESS)
+                out[n].guid[63] = 0;
+            RegCloseKey(devKey);
+        }
         n++;
         if (n >= cap) break;
     }
     SetupDiDestroyDeviceInfoList(devs);
+
+    FillNicNetwork(out, n);
+    FillNicSsids(out, n);
+    SortNics(out, n);
     return n;
 }
 
@@ -1283,10 +1486,43 @@ static void BuildModel(void)
     NicInfo nics[8];
     int nc = EnumNics(nics, 8);
     for (int i = 0; i < nc; i++) {
+        NicInfo& nic = nics[i];
         wchar_t title[256];
-        WPrintf(title, 256, L"网卡: %s", nics[i].name);
+        WPrintf(title, 256, L"网卡: %s", nic.name);
         r = ModelAddRow(ICON_NET, title);
-        ModelAddDetail(r, nics[i].wireless ? L"类型: 无线" : L"类型: 有线");
+
+        wchar_t line[384] = { 0 };
+        WPrintf(line, 384, L"类型: %s", nic.wireless ? L"无线" : L"有线");
+        if (nic.mac[0]) {
+            wchar_t tmp[384];
+            WPrintf(tmp, 384, L"%s    MAC: %s", line, nic.mac);
+            wcsncpy_s(line, 384, tmp, _TRUNCATE);
+        }
+        ModelAddDetail(r, line);
+
+        wchar_t line2[384] = { 0 };
+        if (nic.ip[0])
+            WPrintf(line2, 384, L"IP: %s", nic.ip);
+        if (nic.speedBps > 0) {
+            wchar_t sp[32] = { 0 };
+            FormatSpeed(nic.speedBps, sp, 32);
+            if (sp[0]) {
+                if (line2[0]) wcscat_s(line2, 384, L"    ");
+                wcscat_s(line2, 384, L"速率: ");
+                wcscat_s(line2, 384, sp);
+            }
+        }
+        if (line2[0]) ModelAddDetail(r, line2);
+
+        wchar_t line3[384] = { 0 };
+        if (nic.ssid[0])
+            WPrintf(line3, 384, L"SSID: %s", nic.ssid);
+        if (nic.gateway[0]) {
+            if (line3[0]) wcscat_s(line3, 384, L"    ");
+            wcscat_s(line3, 384, L"网关: ");
+            wcscat_s(line3, 384, nic.gateway);
+        }
+        if (line3[0]) ModelAddDetail(r, line3);
     }
 }
 
