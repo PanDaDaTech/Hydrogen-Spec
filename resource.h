@@ -1,6 +1,7 @@
 // resource.h
 #define IDI_MAIN_ICON 101
 #define IDR_FONT 102
+#define IDR_FONT_BOLD 105
 #define IDR_GPU_IDS 103
 #define IDR_NIC_IDS 104
 

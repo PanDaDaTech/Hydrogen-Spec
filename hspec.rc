@@ -5,6 +5,7 @@
 IDI_MAIN_ICON ICON "winres/hspec.ico"
 
 IDR_FONT RCDATA "winres/MiSans-Medium.ttf"
+IDR_FONT_BOLD RCDATA "winres/MiSans-Bold.ttf"
 
 IDR_GPU_IDS RCDATA "data/gpu_ids.txt"
 IDR_NIC_IDS RCDATA "data/nic_ids.txt"
