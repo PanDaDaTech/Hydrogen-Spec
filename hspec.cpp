@@ -1770,6 +1770,9 @@ static int g_winW = 420;
 static int g_winH = 320;
 static bool g_fontReady = false;
 static HANDLE g_fontReg = NULL;
+// GDI+ cannot see fonts registered with AddFontMemResourceEx, so the same
+// bytes also go into a private collection.  Needed by DrawTextGpLine.
+static Gdiplus::PrivateFontCollection* g_gdipFonts = NULL;
 static ULONGLONG g_wallpaperStamp = 0;
 static NOTIFYICONDATAW g_nid;
 static bool g_trayAdded = false;
@@ -1953,6 +1956,14 @@ static void LoadEmbeddedFont(HINSTANCE inst)
     if (!reg || n == 0) return;
     g_fontReg = reg;
     g_fontReady = true;
+
+    // Same bytes for GDI+ (private collection).  GDI+ needs it to draw the
+    // embedded face without grid fitting - see DrawTextGpLine.
+    if (!g_gdipFonts) {
+        g_gdipFonts = new Gdiplus::PrivateFontCollection();
+        if (g_gdipFonts->GetLastStatus() == Gdiplus::Ok)
+            g_gdipFonts->AddMemoryFont(data, (INT)sz);
+    }
 }
 
 static UINT GetDpiSafe(HWND hwnd)
@@ -2085,10 +2096,11 @@ static void DrawPanelCard(Gdiplus::Graphics& g, const Gdiplus::RectF& rc,
     Gdiplus::GraphicsPath path;
     AddRoundRect(path, rc, radius);
 
-    Gdiplus::Region savedClip;
-    g.GetClip(&savedClip);
-    g.SetClip(&path);
-
+    // Every layer is painted through FillPath so the rounded edge gets the
+    // SmoothingModeAntiAlias coverage ramp.  Do NOT clip: a GDI+ region clip
+    // is hard-edged (no partial alpha), so a clipped DrawImage of the
+    // wallpaper blur would show stair steps along the corner arcs, bleeding
+    // through the semi-transparent card tint (opacity < 100).
     bool filled = false;
     if (CardBlur() && g_wallCache && g_wallCacheW > 0) {
         POINT origin = { 0, 0 };
@@ -2119,9 +2131,18 @@ static void DrawPanelCard(Gdiplus::Graphics& g, const Gdiplus::RectF& rc,
                     sg.DrawImage(g_wallCache,
                         Gdiplus::RectF(0, 0, (float)bw, (float)bh),
                         src.X, src.Y, src.Width, src.Height, Gdiplus::UnitPixel);
+
+                    // Stretch the downsampled patch over rc through the
+                    // rounded path: brush pixels map (0,0)-(bw,bh) onto rc.
+                    Gdiplus::TextureBrush tex(&smallBmp, Gdiplus::WrapModeClamp);
+                    Gdiplus::Matrix m;
+                    m.Scale(rc.Width / (float)bw, rc.Height / (float)bh,
+                        Gdiplus::MatrixOrderAppend);
+                    m.Translate(rc.X, rc.Y, Gdiplus::MatrixOrderAppend);
+                    tex.SetTransform(&m);
                     g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
                     g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
-                    g.DrawImage(&smallBmp, rc);
+                    g.FillPath(&tex, &path);
                     filled = true;
                 }
             }
@@ -2130,12 +2151,11 @@ static void DrawPanelCard(Gdiplus::Graphics& g, const Gdiplus::RectF& rc,
     if (!filled) {
         Gdiplus::SolidBrush base(Gdiplus::Color(255,
             pal.page.GetR(), pal.page.GetG(), pal.page.GetB()));
-        g.FillRectangle(&base, rc);
+        g.FillPath(&base, &path);
     }
 
     Gdiplus::SolidBrush fill(pal.card);
     g.FillPath(&fill, &path);
-    g.SetClip(&savedClip);
 }
 
 static void DrawGlyph(Gdiplus::Graphics& g, Gdiplus::Pen& pen, int kind,
@@ -2241,16 +2261,116 @@ static bool FontCoversText(HDC dc, HFONT hf, const wchar_t* text)
     return ok;
 }
 
-// Render one text line with GDI ClearType on an opaque mask, derive the
-// per-pixel alpha from the luminance difference, then composite the
-// premultiplied result.  This matches the crispness of native static
-// controls (WinosInfo) while keeping the layered window transparent.
+// ---------------------------------------------------------------------------
+// GDI+ text path (no grid fitting)
+//
+// GDI's TrueType rasterizer snaps strokes to integer pixels.  The embedded
+// MiSans subset carries no hinting instructions (no fpgm/cvt), so GDI runs
+// its own auto-hint: stroke width jumps discontinuously as the font size
+// changes (measured on this font: the 14px step drops 22%) and small text
+// goes soft after the luminance->alpha round trip below.  GDI+
+// TextRenderingHintAntiAlias has no grid fitting, so strokes stay linear
+// with size.  This is the same switch Hydrogen-Keyboard made after the
+// identical complaint.
+// ---------------------------------------------------------------------------
+
+static float FontEmPx(HFONT f)
+{
+    LOGFONTW lf = {};
+    if (!f || GetObjectW(f, sizeof(lf), &lf) == 0) return 0.0f;
+    return (float)(lf.lfHeight < 0 ? -lf.lfHeight : lf.lfHeight);
+}
+
+// Latin lowercase with descenders: their ink already sits low in the line
+// box, so the vertical compensation below must be computed differently.
+static bool TextHasDescender(const wchar_t* s)
+{
+    if (!s) return false;
+    for (const wchar_t* p = s; *p; ++p) {
+        wchar_t c = *p;
+        if (c == L'g' || c == L'j' || c == L'p' || c == L'q' || c == L'y') return true;
+    }
+    return false;
+}
+
+// GDI+ LineAlignment=Center centers the line box (MiSans: asc+desc =
+// 1.326em), not the ink.  CJK and capless Latin ink sits high in that box,
+// so a single line must be shifted down by this much to look centered.
+static int TextInkShiftPx(float emPx, const wchar_t* s)
+{
+    if (emPx <= 0.0f) return 0;
+    float v = emPx * (TextHasDescender(s) ? -0.025f : 0.085f);
+    return (int)(v >= 0.0f ? v + 0.5f : v - 0.5f);
+}
+
+// Draw one line straight onto the 32bpp PARGB surface with GDI+.  Returns
+// false when GDI+ cannot serve this line (private font not ready, family
+// unavailable, or the line does not fit its rectangle), so the caller uses
+// the GDI mask path instead.
+static bool DrawTextGpLine(Gdiplus::Graphics& g, const wchar_t* text, float emPx,
+    const Gdiplus::Color& color, int align, double dpiScale,
+    int x, int y, int w, int h)
+{
+    if (!text || !text[0] || w <= 0 || h <= 0 || emPx <= 0.0f) return false;
+    if (!g_gdipFonts) return false;
+
+    Gdiplus::FontFamily family(g_fontReady ? L"MiSans" : L"Microsoft YaHei",
+        g_gdipFonts);
+    if (!family.IsAvailable()) return false;
+    Gdiplus::Font font(&family, emPx, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    if (font.GetLastStatus() != Gdiplus::Ok) return false;
+
+    // GDI+ lays text out with roughly 0.2em of slack per side and, under
+    // NoWrap, DROPS trailing characters (it does not clip) when the
+    // rectangle is narrower than that.  Measure with the same flags first;
+    // lines that do not fit take the caller's GDI ellipsis path.
+    Gdiplus::StringFormat mfmt;
+    mfmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap |
+                        Gdiplus::StringFormatFlagsNoClip);
+    Gdiplus::RectF box(0.0f, 0.0f, 4096.0f, emPx * 4.0f), need;
+    if (g.MeasureString(text, -1, &font, box, &mfmt, &need) != Gdiplus::Ok)
+        return false;
+    if ((int)need.Width + 1 > w) return false;
+
+    // High DPI: no grid fitting keeps stroke width linear with size.
+    // Small text at low DPI needs the grid-fit variant to stay legible.
+    g.SetTextRenderingHint(dpiScale >= 1.5
+        ? Gdiplus::TextRenderingHintAntiAlias
+        : Gdiplus::TextRenderingHintAntiAliasGridFit);
+    g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+
+    Gdiplus::StringFormat fmt;
+    fmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoClip |
+                       Gdiplus::StringFormatFlagsNoWrap);
+    fmt.SetAlignment(align == 1 ? Gdiplus::StringAlignmentCenter
+                   : align == 2 ? Gdiplus::StringAlignmentFar
+                                : Gdiplus::StringAlignmentNear);
+    fmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+
+    Gdiplus::SolidBrush brush(color);
+    Gdiplus::RectF rc((Gdiplus::REAL)x, (Gdiplus::REAL)y,
+                      (Gdiplus::REAL)w, (Gdiplus::REAL)h);
+    rc.Y += (Gdiplus::REAL)TextInkShiftPx(emPx, text);
+    g.DrawString(text, -1, &font, rc, &fmt, &brush);
+    return true;
+}
+
+// Render one text line.  Preferred path: GDI+ straight onto the layered
+// surface (no grid fitting, no luminance->alpha round trip).  Fallback:
+// GDI on an opaque mask, derive per-pixel alpha from the luminance
+// difference, then composite - used when the private font is not ready,
+// the text contains glyphs outside the subset (whole line falls back to
+// the system CJK font), or the line does not fit its rectangle (GDI+
+// would drop trailing characters; GDI DrawTextW ellipsizes instead).
 static void DrawTextGdiLine(Gdiplus::Graphics& g, const wchar_t* text, int px,
     int weight, const Gdiplus::Color& color, bool lightText,
     int x, int y, int w, int h,
-    UINT fmt = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX)
+    UINT fmt = DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
+    double dpiScale = -1.0)
 {
     if (!text || !text[0] || w <= 0 || h <= 0) return;
+    if (dpiScale <= 0.0) dpiScale = (double)g_dpi / 96.0;
 
     BITMAPINFO bi;
     memset(&bi, 0, sizeof(bi));
@@ -2304,6 +2424,22 @@ static void DrawTextGdiLine(Gdiplus::Graphics& g, const wchar_t* text, int px,
         DeleteDC(dc);
         return;
     }
+
+    // Preferred: GDI+ straight onto the surface.  Only for the embedded
+    // face - the YaHei fallback line (glyphs outside the subset) stays on
+    // the GDI mask path so the whole line keeps one consistent face.
+    if (g_fontReady) {
+        int align = (fmt & DT_CENTER) ? 1 : (fmt & DT_RIGHT) ? 2 : 0;
+        if (DrawTextGpLine(g, text, FontEmPx(hf), color, align, dpiScale,
+                x, y, w, h)) {
+            SelectObject(dc, oldBmp);
+            DeleteObject(hbm);
+            DeleteObject(hf);
+            DeleteDC(dc);
+            return;
+        }
+    }
+
     HGDIOBJ oldFont = SelectObject(dc, hf);
     RECT rect;
     rect.left = 0;
@@ -2809,7 +2945,7 @@ static void SText(Gdiplus::Graphics& g, const wchar_t* text, float dp, int weigh
     int px = (int)(dp * s + 0.5);
     if (px < 9) px = 9;
     DrawTextGdiLine(g, text, px, weight, c, light,
-        (int)(x + 0.5f), (int)(y + 0.5f), (int)(w + 0.5f), (int)(h + 0.5f), fmt);
+        (int)(x + 0.5f), (int)(y + 0.5f), (int)(w + 0.5f), (int)(h + 0.5f), fmt, s);
 }
 
 static bool SettingsPush(void);
@@ -3932,6 +4068,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     if (g_fontReg) {
         RemoveFontMemResourceEx(g_fontReg);
         g_fontReg = NULL;
+    }
+    if (g_gdipFonts) {
+        delete g_gdipFonts;
+        g_gdipFonts = NULL;
     }
     Gdiplus::GdiplusShutdown(g_gdiToken);
     return 0;
