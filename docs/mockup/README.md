@@ -140,7 +140,7 @@ MVP 可以先做 **外观 + 显示内容 + 关于**，"面板行为"继续留在
 | 调色板 | `MakePalette(darkCard, alpha)`，`OklchColor()` 把 oklch 直接算成 sRGB；深色卡片由壁纸亮度决定 |
 | 壁纸模糊 | `RefreshWallpaperCache()` + `DrawPanelCard()`：缓存 1280 宽壁纸副本，卡片区域降采样 1/7 再放大，只在壁纸变化时重算 |
 | 主色 | `UpdateTheme()` 在采样的 100 个点里按 OKLCH 色度加权求圆均值 hue（`SrgbToOklchHue`） |
-| 设置窗口 | 独立 `WS_EX_LAYERED` 自绘窗口 + 命中区表；`WM_DPICHANGED` 重排；文本复用 `DrawTextGdiLine`（同一套 MiSans 与 ClearType-alpha 管线） |
+| 设置窗口 | 独立 `WS_EX_LAYERED` 自绘窗口 + 命中区表；`WM_DPICHANGED` 重排；文本复用 `DrawTextGdiLine`（同一套 MiSans 与灰度抗锯齿→alpha 管线） |
 | 缩略图 | `DrawThemeThumb()` 程序化绘制，跟随当前主色，零图片资源 |
 | 配置 | `HSpec.ini`（`GetPrivateProfileInt` / `WritePrivateProfileString`），程序目录优先，不可写退到 `%APPDATA%\HSpec` |
 | 调试 | `--dump <png>`、`--dump-settings <png> [--page N]`、`--theme N`、`--settings` |
@@ -171,23 +171,11 @@ removed 0
 
 新增的这 47 个正是「外观 / 纯文字 / 跟随壁纸取色 / 卡片不透明度 / 圆角 / 渲染层 / 桌面」这些设置页文案用到的字，补齐后不会再整行回退雅黑。
 
-### 加粗：用真 Bold 面，不用 GDI 合成加粗
+### 加粗：全文不用 Bold 字重
 
-界面里所有 `FW_BOLD` 标题原先都是拿 Medium 子集让 GDI 合成加粗——笔画被人工描粗，再经过
-`DrawTextGdiLine` 的亮度→alpha 反推，边缘发灰发虚（用户明确反馈"发虚""就不能不加粗或换个字体显示方案"）。
+界面里**没有任何粗体**。两条路都走过、都不采用：
 
-现在内嵌**两个字面**，同族名 `MiSans`，只靠字重区分（与系统微软雅黑 Bold 的组织方式一致）：
+1. **GDI 合成加粗**（Medium 子集 + `FW_BOLD`）：笔画被人工描粗，再经过 `DrawTextGdiLine` 的亮度→alpha 反推，边缘发灰发虚——用户原话「发虚」「就不能不加粗吗」。
+2. **内嵌真 MiSans Bold 面**：渲染是锐利了，但用户明确不要 Bold 字重，已整体移除（`git log` 里有 `Embed real MiSans Bold face for bold text` 及其回退，需要时可参考）。
 
-| 面 | 文件 | usWeightClass | 用途 |
-| :--- | :--- | :--- | :--- |
-| Medium | `winres/MiSans-Medium.ttf` | 500 | 正文（FW_NORMAL 请求） |
-| Bold | `winres/MiSans-Bold.ttf` | 700 | 标题（FW_BOLD 请求） |
-
-`tools/subset_font.py`（无参重建两个面 / `--bold`、`--medium` 单修一个 / `--check` 两个都验）
-在子集时把 nameID 1 统一改写成 `MiSans`、按面设置 `usWeightClass` 与 `fsSelection`，
-运行时 `LoadEmbeddedFont()` 用 `AddFontMemResourceEx` 注册两个资源，
-`CreateFontW(..., L"MiSans", FW_BOLD)` 即命中真 Bold 轮廓。
-
-实测验证（`mockup/texttest/t5.cpp`，与 `DrawTextGdiLine` 同一条管线）：
-子集双面注册 + FW_BOLD 的渲染与直接加载完整 MiSans-Bold.ttf 的参考图**逐像素一致（0 差异）**；
-而仅注册 Medium 时的合成加粗有 6062 像素差异。即加粗路径已无任何合成描边。
+层级现在只靠**字号 + 颜色**区分（标题 `pal.title` / 明细 `pal.detail`，页标题 17px、节标题 13px、正文 11.5~12.5px）。`tools/subset_font.py` 的 docstring 里也写明了这条约束：新增文本一律 `FW_NORMAL`。

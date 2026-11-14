@@ -1940,28 +1940,19 @@ static void UpdateTheme(void)
 
 static void LoadEmbeddedFont(HINSTANCE inst)
 {
-    // Register the Medium face (weight 500) and the real Bold face (weight
-    // 700).  Both share family name "MiSans", so CreateFontW picks the bold
-    // face by weight alone - no GDI synthetic emboldening anywhere.
-    static const int kFontRes[] = { IDR_FONT, IDR_FONT_BOLD };
-    for (int i = 0; i < 2; i++) {
-        HRSRC hr = FindResourceW(inst, MAKEINTRESOURCEW(kFontRes[i]),
-            MAKEINTRESOURCEW(10));
-        if (!hr) continue;
-        HGLOBAL hg = LoadResource(inst, hr);
-        if (!hg) continue;
-        void* data = LockResource(hg);
-        DWORD sz = SizeofResource(inst, hr);
-        if (!data || sz == 0) continue;
+    HRSRC hr = FindResourceW(inst, MAKEINTRESOURCEW(IDR_FONT), MAKEINTRESOURCEW(10));
+    if (!hr) return;
+    HGLOBAL hg = LoadResource(inst, hr);
+    if (!hg) return;
+    void* data = LockResource(hg);
+    DWORD sz = SizeofResource(inst, hr);
+    if (!data || sz == 0) return;
 
-        DWORD n = 0;
-        HANDLE reg = AddFontMemResourceEx(data, sz, NULL, &n);
-        if (!reg || n == 0) continue;
-        if (i == 0) {
-            g_fontReg = reg;
-            g_fontReady = true;
-        }
-    }
+    DWORD n = 0;
+    HANDLE reg = AddFontMemResourceEx(data, sz, NULL, &n);
+    if (!reg || n == 0) return;
+    g_fontReg = reg;
+    g_fontReady = true;
 }
 
 static UINT GetDpiSafe(HWND hwnd)
@@ -2457,7 +2448,7 @@ static bool RenderInternal(void)
             float iconY = y + ((float)g_titleH - (float)g_iconSize) * 0.5f;
             DrawGlyph(g, pen, row.icon, 2.0f * (float)s, iconY, (float)g_iconSize, (float)s);
         }
-        DrawTextGdiLine(g, row.title, titlePx, FW_BOLD, titleColor, lightText,
+        DrawTextGdiLine(g, row.title, titlePx, FW_NORMAL, titleColor, lightText,
             (int)textX, (int)y, (int)textW, g_titleH);
         y += (float)g_titleH;
         for (int j = 0; j < row.detailCount; j++) {
@@ -3004,7 +2995,7 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     Gdiplus::RectF cardC1(x, y, w, 172 * s);
     FillRound(g, cardC1, 12 * s, pal.card);
     float cy = y + pad;
-    SText(g, L"主题", 13, FW_BOLD, pal.title, light, x + 16 * s, cy, w - 32 * s, 18 * s);
+    SText(g, L"主题", 13, FW_NORMAL, pal.title, light, x + 16 * s, cy, w - 32 * s, 18 * s);
     cy += 19 * s;
     SText(g, L"同一个信息模型，三种渲染层", 11, FW_NORMAL, sub, light,
         x + 16 * s, cy, w - 32 * s, 16 * s);
@@ -3025,7 +3016,7 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
             g.DrawPath(&ring, &p);
         }
         Gdiplus::Color capColor = (g_cfg.theme == i) ? pal.itemFg : sub;
-        SText(g, names[i], 11.5f, (g_cfg.theme == i) ? FW_BOLD : FW_NORMAL, capColor, light,
+        SText(g, names[i], 11.5f, FW_NORMAL, capColor, light,
             tx, cy + 88 * s, tileW - 16 * s, 16 * s);
         // radio dot
         float dotR = 5.5f * s;
@@ -3044,7 +3035,7 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     Gdiplus::RectF cardC2(x, y2, w, 128 * s);
     FillRound(g, cardC2, 12 * s, pal.card);
     float cy2 = y2 + pad;
-    SText(g, L"主色", 13, FW_BOLD, pal.title, light, x + 16 * s, cy2, w - 32 * s, 18 * s);
+    SText(g, L"主色", 13, FW_NORMAL, pal.title, light, x + 16 * s, cy2, w - 32 * s, 18 * s);
     cy2 += 21 * s;
 
     SText(g, L"跟随壁纸取色", 12.5f, FW_NORMAL, pal.title, light, x + 16 * s, cy2,
@@ -3072,7 +3063,7 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     Gdiplus::RectF cardC3(x, y3, w, 118 * s);
     FillRound(g, cardC3, 12 * s, pal.card);
     float cy3 = y3 + pad;
-    SText(g, L"面板", 13, FW_BOLD, pal.title, light, x + 16 * s, cy3, w - 32 * s, 18 * s);
+    SText(g, L"面板", 13, FW_NORMAL, pal.title, light, x + 16 * s, cy3, w - 32 * s, 18 * s);
     cy3 += 26 * s;
 
     struct { const wchar_t* name; int value; int act; int minV; int maxV; const wchar_t* unit; } rows[2] = {
@@ -3159,7 +3150,7 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
     }
 
     float ty = y + 76 * s;
-    SText(g, L"轻谱 Hydrogen Spec", 18, FW_BOLD, pal.title, light, x, ty, w, 26 * s,
+    SText(g, L"轻谱 Hydrogen Spec", 18, FW_NORMAL, pal.title, light, x, ty, w, 26 * s,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     wchar_t ver[96];
     WPrintf(ver, 96, L"v%s · %s · MIT License", kAppVersion,
@@ -3177,7 +3168,7 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
     const wchar_t* keys[4] = { L"许可", L"界面字体", L"数据来源", L"运行方式" };
     const wchar_t* vals[4] = {
         L"MIT License",
-        L"MiSans Medium / Bold 子集 · 内嵌",
+        L"MiSans Medium 子集 · 内嵌",
         L"SMBIOS · UEFI 变量 · 注册表 · 物理磁盘 IOCTL",
         L"单文件 · 静默 · 不联网" };
     for (int i = 0; i < 4; i++) {
@@ -3197,10 +3188,10 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
     Gdiplus::RectF b1(cx - (bw1 + bw2 + 10 * s) * 0.5f, by, bw1, bh);
     Gdiplus::RectF b2(b1.GetRight() + 10 * s, by, bw2, bh);
     FillRound(g, b1, 9 * s, pal.chipBg);
-    SText(g, L"GitHub 仓库", 12.5f, FW_BOLD, pal.itemFg, light, b1.X, b1.Y, b1.Width, b1.Height,
+    SText(g, L"GitHub 仓库", 12.5f, FW_NORMAL, pal.itemFg, light, b1.X, b1.Y, b1.Width, b1.Height,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     FillRound(g, b2, 9 * s, pal.primary);
-    SText(g, L"复制版本信息", 12.5f, FW_BOLD, Gdiplus::Color(255, 255, 255, 255), true,
+    SText(g, L"复制版本信息", 12.5f, FW_NORMAL, Gdiplus::Color(255, 255, 255, 255), true,
         b2.X, b2.Y, b2.Width, b2.Height,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     HitAdd((int)b1.X, (int)b1.Y, (int)b1.Width, (int)b1.Height, ACT_GITHUB);
@@ -3269,7 +3260,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
         if (on) FillRound(g, item, 10 * s, pal.itemBg);
         Gdiplus::Color fg = on ? pal.itemFg : pal.detail;
         DrawNavIcon(g, i == 2 ? 2 : i, item.X + 10 * s, item.Y + 9.5f * s, 15 * s, fg);
-        SText(g, navNames[i], 12.5f, on ? FW_BOLD : FW_NORMAL, fg, light,
+        SText(g, navNames[i], 12.5f, FW_NORMAL, fg, light,
             item.X + 33 * s, item.Y, item.Width - 40 * s, item.Height);
         HitAdd((int)item.X, (int)item.Y, (int)item.Width, (int)item.Height, ACT_NAV + i);
     }
@@ -3288,7 +3279,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     const wchar_t* titles[3] = { L"外观", L"显示内容", L"关于" };
     if (g_setPage != 2) {
         FillRound(g, MRect(cxp, cyp + 4 * s, 3 * s, 15 * s), 2 * s, pal.primary);
-        SText(g, titles[g_setPage], 17, FW_BOLD, pal.title, light, cxp + 11 * s, cyp,
+        SText(g, titles[g_setPage], 17, FW_NORMAL, pal.title, light, cxp + 11 * s, cyp,
             cwp - 11 * s, 24 * s);
         SText(g, g_setPage == 0 ? L"面板画在桌面层上，这里决定它离壁纸有多近"
                                 : L"关掉的项目不再出现在面板上",
