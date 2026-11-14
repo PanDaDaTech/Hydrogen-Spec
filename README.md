@@ -1,8 +1,8 @@
-# HSpec 轻谱
+# 轻谱 Hydrogen Spec
 
 轻量、零依赖的桌面硬件信息面板。纯 Win32 C++，直接画在桌面层上：**不置顶、背景透明、不吃焦点**。
 
-![HSpec 预览](docs/preview.png)
+![Hydrogen Spec 预览](docs/preview.png)
 
 ```
 ┌ 桌面（壁纸层）
@@ -103,12 +103,12 @@ python tools/build_ids.py --gpu <显卡ID.IDS> --nic <网卡ID.ids>
 rc /nologo /c65001 /fo build\hspec.res hspec.rc
 cl /nologo /utf-8 /O2 /MT /EHsc /std:c++17 /D_WIN32_WINNT=0x0601 hspec.cpp build\hspec.res ^
    /link /OUT:dist\HSpec.exe /SUBSYSTEM:WINDOWS ^
-   gdiplus.lib crypt32.lib advapi32.lib user32.lib gdi32.lib
+   gdiplus.lib crypt32.lib advapi32.lib shell32.lib setupapi.lib iphlpapi.lib ole32.lib user32.lib gdi32.lib
 ```
 
-## 与 HKeyboard / HRime 的关系
+## 与 Hydrogen Keyboard / Hydrogen Rime 的关系
 
-同一套做法：单文件纯 Win32 C++、MSVC 静态 CRT、GitHub Actions 三架构编译。命名沿用 `H` + 英文 / `轻` + 单字：HKeyboard / 轻键、HRime / 轻韵、**HSpec / 轻谱**。
+同一套做法：单文件纯 Win32 C++、MSVC 静态 CRT、GitHub Actions 三架构编译。命名沿用 `H` + 英文 / `轻` + 单字：Hydrogen Keyboard / 轻键、Hydrogen Rime / 轻韵、**Hydrogen Spec / 轻谱**（可执行文件仍为 `HSpec`）。
 
 ## License
 
