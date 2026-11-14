@@ -2117,9 +2117,12 @@ static void DrawPanelCard(Gdiplus::Graphics& g, const Gdiplus::RectF& rc,
             int bw = (int)(rc.Width / 7.0f);
             int bh = (int)(rc.Height / 7.0f);
             if (bw >= 6 && bh >= 6) {
-                Gdiplus::Bitmap small(bw, bh, PixelFormat32bppPARGB);
-                if (small.GetLastStatus() == Gdiplus::Ok) {
-                    Gdiplus::Graphics sg(&small);
+                // NOTE: do not name this "small" - the Windows SDK has
+                // "#define small char" (MinGW headers don't), which breaks
+                // the MSVC build in the CI.
+                Gdiplus::Bitmap smallBmp(bw, bh, PixelFormat32bppPARGB);
+                if (smallBmp.GetLastStatus() == Gdiplus::Ok) {
+                    Gdiplus::Graphics sg(&smallBmp);
                     sg.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
                     sg.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
                     sg.DrawImage(g_wallCache,
@@ -2127,7 +2130,7 @@ static void DrawPanelCard(Gdiplus::Graphics& g, const Gdiplus::RectF& rc,
                         src.X, src.Y, src.Width, src.Height, Gdiplus::UnitPixel);
                     g.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
                     g.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHighQuality);
-                    g.DrawImage(&small, rc);
+                    g.DrawImage(&smallBmp, rc);
                     filled = true;
                 }
             }
