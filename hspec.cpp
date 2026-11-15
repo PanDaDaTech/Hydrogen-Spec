@@ -1961,9 +1961,12 @@ static void LoadEmbeddedFont(HINSTANCE inst)
     // embedded face without grid fitting - see DrawTextGpLine.
     if (!g_gdipFonts) {
         g_gdipFonts = new Gdiplus::PrivateFontCollection();
-        if (g_gdipFonts->GetLastStatus() == Gdiplus::Ok)
-            g_gdipFonts->AddMemoryFont(data, (INT)sz);
+        if (g_gdipFonts->GetLastStatus() != Gdiplus::Ok) {
+            delete g_gdipFonts;
+            g_gdipFonts = NULL;
+        }
     }
+    if (g_gdipFonts) g_gdipFonts->AddMemoryFont(data, (INT)sz);
 }
 
 static UINT GetDpiSafe(HWND hwnd)
@@ -3124,66 +3127,67 @@ static void DrawNavIcon(Gdiplus::Graphics& g, int kind, float x, float y, float 
 static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float x, float y, float w, float s)
 {
-    const float pad = 14 * s;
+    const float pad = 20 * s;
     Gdiplus::Color sub = pal.detail;
 
     // --- 主题 ---
-    Gdiplus::RectF cardC1(x, y, w, 172 * s);
-    FillRound(g, cardC1, 12 * s, pal.card);
-    float cy = y + pad;
-    SText(g, L"主题", 13, FW_NORMAL, pal.title, light, x + 16 * s, cy, w - 32 * s, 18 * s);
-    cy += 19 * s;
-    SText(g, L"同一个信息模型，三种渲染层", 11, FW_NORMAL, sub, light,
-        x + 16 * s, cy, w - 32 * s, 16 * s);
-    cy += 22 * s;
-
     const wchar_t* names[3] = { L"纯文字", L"轻卡片", L"Ethereal" };
-    float tileW = 161 * s;
-    float gap = 12 * s;
+    float gap = 16 * s;
+    float tileW = (w - 40 * s - 2 * gap) / 3.0f;
+    float thumbH = tileW * 84.0f / 161.0f;
+    float cardH1 = pad + 26 * s + 30 * s + thumbH + 8 * s + 24 * s + pad;
+    Gdiplus::RectF cardC1(x, y, w, cardH1);
+    FillRound(g, cardC1, 14 * s, pal.card);
+    float cy = y + pad;
+    SText(g, L"主题", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy, w - 40 * s, 24 * s);
+    cy += 26 * s;
+    SText(g, L"同一个信息模型，三种渲染层", 14, FW_NORMAL, sub, light,
+        x + 20 * s, cy, w - 40 * s, 20 * s);
+    cy += 30 * s;
     for (int i = 0; i < 3; i++) {
-        float tx = x + 16 * s + i * (tileW + gap);
-        Gdiplus::RectF thumb(tx, cy, tileW, 84 * s);
+        float tx = x + 20 * s + i * (tileW + gap);
+        Gdiplus::RectF thumb(tx, cy, tileW, thumbH);
         DrawThemeThumb(g, thumb, i, pal, s);
         if (g_cfg.theme == i) {
-            Gdiplus::Pen ring(pal.primary, 2.0f * s);
+            Gdiplus::Pen ring(pal.primary, 2.2f * s);
             Gdiplus::GraphicsPath p;
-            AddRoundRect(p, Gdiplus::RectF(thumb.X - 2 * s, thumb.Y - 2 * s,
-                thumb.Width + 4 * s, thumb.Height + 4 * s), 11 * s);
+            AddRoundRect(p, Gdiplus::RectF(thumb.X - 2.5f * s, thumb.Y - 2.5f * s,
+                thumb.Width + 5 * s, thumb.Height + 5 * s), 13 * s);
             g.DrawPath(&ring, &p);
         }
         Gdiplus::Color capColor = (g_cfg.theme == i) ? pal.itemFg : sub;
-        SText(g, names[i], 11.5f, FW_NORMAL, capColor, light,
-            tx, cy + 88 * s, tileW - 16 * s, 16 * s);
+        SText(g, names[i], 14, FW_NORMAL, capColor, light,
+            tx, cy + thumbH + 8 * s, tileW - 22 * s, 22 * s);
         // radio dot
-        float dotR = 5.5f * s;
-        float dx = tx + tileW - dotR * 2, dy = cy + 88 * s + (16 * s - dotR * 2) * 0.5f;
-        Gdiplus::Pen dotPen((g_cfg.theme == i) ? pal.primary : pal.chipBg, 1.5f * s);
+        float dotR = 6.5f * s;
+        float dx = tx + tileW - dotR * 2, dy = cy + thumbH + 8 * s + (22 * s - dotR * 2) * 0.5f;
+        Gdiplus::Pen dotPen((g_cfg.theme == i) ? pal.primary : pal.chipBg, 1.8f * s);
         g.DrawEllipse(&dotPen, dx, dy, dotR * 2, dotR * 2);
         if (g_cfg.theme == i) {
             Gdiplus::SolidBrush dotB(pal.primary);
-            g.FillEllipse(&dotB, dx + 3.0f * s, dy + 3.0f * s, dotR * 2 - 6 * s, dotR * 2 - 6 * s);
+            g.FillEllipse(&dotB, dx + 3.5f * s, dy + 3.5f * s, dotR * 2 - 7 * s, dotR * 2 - 7 * s);
         }
-        HitAdd((int)tx, (int)thumb.Y, (int)tileW, (int)(thumb.Height + 20 * s), ACT_THEME + i);
+        HitAdd((int)tx, (int)thumb.Y, (int)tileW, (int)(thumb.Height + 32 * s), ACT_THEME + i);
     }
 
     // --- 主色 ---
-    float y2 = cardC1.GetBottom() + 11 * s;
-    Gdiplus::RectF cardC2(x, y2, w, 128 * s);
-    FillRound(g, cardC2, 12 * s, pal.card);
+    float y2 = cardC1.GetBottom() + 14 * s;
+    Gdiplus::RectF cardC2(x, y2, w, 172 * s);
+    FillRound(g, cardC2, 14 * s, pal.card);
     float cy2 = y2 + pad;
-    SText(g, L"主色", 13, FW_NORMAL, pal.title, light, x + 16 * s, cy2, w - 32 * s, 18 * s);
-    cy2 += 21 * s;
+    SText(g, L"主色", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy2, w - 40 * s, 24 * s);
+    cy2 += 28 * s;
 
-    SText(g, L"跟随壁纸取色", 12.5f, FW_NORMAL, pal.title, light, x + 16 * s, cy2,
-        w - 120 * s, 18 * s);
-    SText(g, L"从壁纸采样主色，换算成 oklch 的 hue", 11, FW_NORMAL, sub, light,
-        x + 16 * s, cy2 + 16 * s, w - 120 * s, 14 * s);
-    Gdiplus::RectF sw(x + w - 16 * s - 38 * s, cy2 + 1 * s, 38 * s, 21 * s);
+    SText(g, L"跟随壁纸取色", 15, FW_NORMAL, pal.title, light, x + 20 * s, cy2,
+        w - 140 * s, 22 * s);
+    SText(g, L"从壁纸采样主色，换算成 oklch 的 hue", 13.5f, FW_NORMAL, sub, light,
+        x + 20 * s, cy2 + 22 * s, w - 140 * s, 18 * s);
+    Gdiplus::RectF sw(x + w - 20 * s - 44 * s, cy2 + 2 * s, 44 * s, 24 * s);
     DrawSwitch(g, sw, g_cfg.hueFollow != 0, pal);
     HitAdd((int)sw.X, (int)sw.Y, (int)sw.Width, (int)sw.Height, ACT_HUE_FOLLOW);
 
-    float hueY = cy2 + 42 * s;
-    Gdiplus::RectF hue(x + 16 * s, hueY, w - 32 * s, 20 * s);
+    float hueY = cy2 + 52 * s;
+    Gdiplus::RectF hue(x + 20 * s, hueY, w - 40 * s, 22 * s);
     DrawHueStrip(g, hue, (float)HueDeg(), pal);
     g_hueTrack = RECT{ (LONG)hue.X, (LONG)hue.Y, (LONG)hue.GetRight(), (LONG)hue.GetBottom() };
     HitAdd((int)hue.X - 4, (int)hue.Y - 6, (int)hue.Width + 8, (int)hue.Height + 12, ACT_HUE_STRIP);
@@ -3191,35 +3195,36 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     wchar_t hueText[64];
     WPrintf(hueText, 64, L"Hue %d · %s", HueDeg(),
         g_cfg.hueFollow ? L"取自壁纸" : L"手动");
-    SText(g, hueText, 11, FW_NORMAL, sub, light, x + 16 * s, hueY + 24 * s,
-        w - 100 * s, 14 * s);
+    SText(g, hueText, 13.5f, FW_NORMAL, sub, light, x + 20 * s, hueY + 30 * s,
+        w - 120 * s, 18 * s);
 
     // --- 面板 ---
-    float y3 = cardC2.GetBottom() + 11 * s;
-    Gdiplus::RectF cardC3(x, y3, w, 118 * s);
-    FillRound(g, cardC3, 12 * s, pal.card);
+    float y3 = cardC2.GetBottom() + 14 * s;
+    Gdiplus::RectF cardC3(x, y3, w, 150 * s);
+    FillRound(g, cardC3, 14 * s, pal.card);
     float cy3 = y3 + pad;
-    SText(g, L"面板", 13, FW_NORMAL, pal.title, light, x + 16 * s, cy3, w - 32 * s, 18 * s);
-    cy3 += 26 * s;
+    SText(g, L"面板", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy3, w - 40 * s, 24 * s);
+    cy3 += 32 * s;
 
     struct { const wchar_t* name; int value; int act; int minV; int maxV; const wchar_t* unit; } rows[2] = {
         { L"卡片不透明度", g_cfg.opacity, ACT_OPACITY, 40, 100, L"%" },
         { L"圆角", g_cfg.radius, ACT_RADIUS, 0, 24, L"px" },
     };
     for (int i = 0; i < 2; i++) {
-        float ry = cy3 + i * 30 * s;
-        SText(g, rows[i].name, 12.5f, FW_NORMAL, pal.title, light, x + 16 * s, ry,
-            130 * s, 20 * s);
-        Gdiplus::RectF track(x + 16 * s + 130 * s, ry + 6 * s, w - 16 * s * 2 - 130 * s - 52 * s, 8 * s);
+        float ry = cy3 + i * 38 * s;
+        SText(g, rows[i].name, 15, FW_NORMAL, pal.title, light, x + 20 * s, ry,
+            150 * s, 24 * s);
+        Gdiplus::RectF track(x + 20 * s + 150 * s, ry + 8 * s,
+            w - 40 * s - 150 * s - 64 * s, 9 * s);
         float t = (float)(rows[i].value - rows[i].minV) / (float)(rows[i].maxV - rows[i].minV);
         DrawSlider(g, track, t, pal, light);
         wchar_t val[32];
         WPrintf(val, 32, L"%d%s", rows[i].value, rows[i].unit);
-        SText(g, val, 11.5f, FW_NORMAL, sub, light, track.GetRight() + 6 * s, ry,
-            46 * s, 20 * s, DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        SText(g, val, 14, FW_NORMAL, sub, light, track.GetRight() + 8 * s, ry,
+            56 * s, 24 * s, DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         RECT* target = (rows[i].act == ACT_OPACITY) ? &g_opTrack : &g_radTrack;
         *target = RECT{ (LONG)track.X, (LONG)track.Y, (LONG)track.GetRight(), (LONG)track.GetBottom() };
-        HitAdd((int)track.X - 6, (int)ry, (int)track.Width + 12, (int)22 * s, rows[i].act);
+        HitAdd((int)track.X - 6, (int)ry, (int)track.Width + 12, (int)(26 * s), rows[i].act);
     }
 }
 
@@ -3236,37 +3241,37 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
         L"型号（PE 下 PCI ID 兜底）",
         L"类型 / MAC / IP / 速率 / SSID / 网关" };
 
-    const float rowH = 66 * s;
-    Gdiplus::RectF card(x, y, w, TOGGLE_COUNT * rowH + 16 * s);
-    FillRound(g, card, 12 * s, pal.card);
+    const float rowH = 84 * s;
+    Gdiplus::RectF card(x, y, w, TOGGLE_COUNT * rowH + 24 * s);
+    FillRound(g, card, 14 * s, pal.card);
 
     for (int i = 0; i < TOGGLE_COUNT; i++) {
-        float ry = y + 8 * s + i * rowH;
+        float ry = y + 12 * s + i * rowH;
         if (i > 0) {
             Gdiplus::Pen line(pal.divider, 1.0f);
-            g.DrawLine(&line, x + 16 * s, ry - 6 * s, card.GetRight() - 16 * s, ry - 6 * s);
+            g.DrawLine(&line, x + 20 * s, ry - 8 * s, card.GetRight() - 20 * s, ry - 8 * s);
         }
 
-        // 68x40 preview of what the panel row will look like.
-        Gdiplus::RectF prev(x + 16 * s, ry + 10 * s, 68 * s, 40 * s);
-        FillRound(g, prev, 7 * s, pal.chipBg);
-        Gdiplus::Pen glyphPen(pal.chipFg, 1.2f);
+        // 84x48 preview of what the panel row will look like.
+        Gdiplus::RectF prev(x + 20 * s, ry + 18 * s, 84 * s, 48 * s);
+        FillRound(g, prev, 9 * s, pal.chipBg);
+        Gdiplus::Pen glyphPen(pal.chipFg, 1.4f);
         glyphPen.SetLineJoin(Gdiplus::LineJoinRound);
         glyphPen.SetStartCap(Gdiplus::LineCapRound);
         glyphPen.SetEndCap(Gdiplus::LineCapRound);
-        DrawGlyph(g, glyphPen, i, prev.X + 6 * s, prev.Y + 10 * s, 20 * s, (float)s);
-        FillRound(g, MRect(prev.X + 32 * s, prev.Y + 13 * s, 28 * s, 3.5f * s), 2 * s, pal.title);
-        FillRound(g, MRect(prev.X + 32 * s, prev.Y + 21 * s, 24 * s, 2.5f * s), 1.5f * s, pal.detail);
-        FillRound(g, MRect(prev.X + 32 * s, prev.Y + 27 * s, 20 * s, 2.5f * s), 1.5f * s, pal.detail);
+        DrawGlyph(g, glyphPen, i, prev.X + 8 * s, prev.Y + 12 * s, 24 * s, (float)s);
+        FillRound(g, MRect(prev.X + 40 * s, prev.Y + 15 * s, 34 * s, 4 * s), 2 * s, pal.title);
+        FillRound(g, MRect(prev.X + 40 * s, prev.Y + 25 * s, 30 * s, 3 * s), 1.5f * s, pal.detail);
+        FillRound(g, MRect(prev.X + 40 * s, prev.Y + 33 * s, 24 * s, 3 * s), 1.5f * s, pal.detail);
 
-        SText(g, names[i], 12.5f, FW_NORMAL, pal.title, light,
-            x + 96 * s, ry + 12 * s, w - 96 * s - 70 * s, 18 * s);
-        SText(g, metas[i], 11, FW_NORMAL, pal.detail, light,
-            x + 96 * s, ry + 32 * s, w - 96 * s - 70 * s, 15 * s);
+        SText(g, names[i], 16, FW_NORMAL, pal.title, light,
+            x + 122 * s, ry + 18 * s, w - 122 * s - 84 * s, 24 * s);
+        SText(g, metas[i], 13.5f, FW_NORMAL, pal.detail, light,
+            x + 122 * s, ry + 46 * s, w - 122 * s - 84 * s, 20 * s);
 
-        Gdiplus::RectF sw(card.GetRight() - 16 * s - 38 * s, ry + 20 * s, 38 * s, 21 * s);
+        Gdiplus::RectF sw(card.GetRight() - 20 * s - 44 * s, ry + 30 * s, 44 * s, 24 * s);
         DrawSwitch(g, sw, ToggleValue(i) != 0, pal);
-        HitAdd((int)(x + 8 * s), (int)(ry + 2 * s), (int)(w - 16 * s), (int)(rowH - 4 * s),
+        HitAdd((int)(x + 10 * s), (int)(ry + 4 * s), (int)(w - 20 * s), (int)(rowH - 8 * s),
             ACT_TOGGLE + i);
     }
 }
@@ -3277,30 +3282,30 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float cx = x + w * 0.5f;
 
     // App icon on a plate; the icon is a black outline, so invert it on dark.
-    Gdiplus::RectF plate(cx - 31 * s, y + 4 * s, 62 * s, 62 * s);
-    FillRound(g, plate, 16 * s, pal.card);
+    Gdiplus::RectF plate(cx - 38 * s, y + 6 * s, 76 * s, 76 * s);
+    FillRound(g, plate, 18 * s, pal.card);
     Gdiplus::Bitmap* logo = light ? g_logoDark : g_logoLight;
     if (logo && logo->GetLastStatus() == Gdiplus::Ok) {
-        float lz = 34 * s;
-        g.DrawImage(logo, Gdiplus::RectF(cx - lz * 0.5f, y + 4 * s + (62 * s - lz) * 0.5f, lz, lz));
+        float lz = 42 * s;
+        g.DrawImage(logo, Gdiplus::RectF(cx - lz * 0.5f, y + 6 * s + (76 * s - lz) * 0.5f, lz, lz));
     }
 
-    float ty = y + 76 * s;
-    SText(g, L"轻谱 Hydrogen Spec", 18, FW_NORMAL, pal.title, light, x, ty, w, 26 * s,
+    float ty = y + 96 * s;
+    SText(g, L"轻谱 Hydrogen Spec", 24, FW_NORMAL, pal.title, light, x, ty, w, 34 * s,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     wchar_t ver[96];
     WPrintf(ver, 96, L"v%s · %s · MIT License", kAppVersion,
         sizeof(void*) == 8 ? L"x64" : L"x86");
-    SText(g, ver, 11, FW_NORMAL, pal.detail, light, x, ty + 26 * s, w, 16 * s,
+    SText(g, ver, 13.5f, FW_NORMAL, pal.detail, light, x, ty + 36 * s, w, 20 * s,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-    SText(g, L"轻量、零依赖的桌面硬件信息面板", 12, FW_NORMAL, pal.detail, light,
-        x, ty + 44 * s, w, 18 * s,
+    SText(g, L"轻量、零依赖的桌面硬件信息面板", 14, FW_NORMAL, pal.detail, light,
+        x, ty + 60 * s, w, 22 * s,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 
-    float iy = ty + 70 * s;
-    const float infoRow = 36 * s;
-    Gdiplus::RectF info(x + 20 * s, iy, w - 40 * s, 4 * infoRow + 8 * s);
-    FillRound(g, info, 12 * s, pal.card);
+    float iy = ty + 96 * s;
+    const float infoRow = 50 * s;
+    Gdiplus::RectF info(x + 28 * s, iy, w - 56 * s, 4 * infoRow + 12 * s);
+    FillRound(g, info, 14 * s, pal.card);
     const wchar_t* keys[4] = { L"许可", L"界面字体", L"数据来源", L"运行方式" };
     const wchar_t* vals[4] = {
         L"MIT License",
@@ -3308,33 +3313,33 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
         L"SMBIOS · UEFI 变量 · 注册表 · 物理磁盘 IOCTL",
         L"单文件 · 静默 · 不联网" };
     for (int i = 0; i < 4; i++) {
-        float ry = iy + 4 * s + i * infoRow;
+        float ry = iy + 6 * s + i * infoRow;
         if (i > 0) {
             Gdiplus::Pen line(pal.divider, 1.0f);
-            g.DrawLine(&line, info.X + 16 * s, ry, info.GetRight() - 16 * s, ry);
+            g.DrawLine(&line, info.X + 20 * s, ry, info.GetRight() - 20 * s, ry);
         }
-        SText(g, keys[i], 11.5f, FW_NORMAL, pal.detail, light, info.X + 16 * s, ry,
-            88 * s, infoRow);
-        SText(g, vals[i], 11.5f, FW_NORMAL, pal.title, light, info.X + 104 * s, ry,
-            info.Width - 120 * s, infoRow);
+        SText(g, keys[i], 14, FW_NORMAL, pal.detail, light, info.X + 20 * s, ry,
+            110 * s, infoRow);
+        SText(g, vals[i], 15, FW_NORMAL, pal.title, light, info.X + 136 * s, ry,
+            info.Width - 156 * s, infoRow);
     }
 
-    float by = info.GetBottom() + 14 * s;
-    float bw1 = 118 * s, bw2 = 124 * s, bh = 32 * s;
-    Gdiplus::RectF b1(cx - (bw1 + bw2 + 10 * s) * 0.5f, by, bw1, bh);
-    Gdiplus::RectF b2(b1.GetRight() + 10 * s, by, bw2, bh);
-    FillRound(g, b1, 9 * s, pal.chipBg);
-    SText(g, L"GitHub 仓库", 12.5f, FW_NORMAL, pal.itemFg, light, b1.X, b1.Y, b1.Width, b1.Height,
+    float by = info.GetBottom() + 20 * s;
+    float bw1 = 156 * s, bw2 = 168 * s, bh = 44 * s;
+    Gdiplus::RectF b1(cx - (bw1 + bw2 + 12 * s) * 0.5f, by, bw1, bh);
+    Gdiplus::RectF b2(b1.GetRight() + 12 * s, by, bw2, bh);
+    FillRound(g, b1, 11 * s, pal.chipBg);
+    SText(g, L"GitHub 仓库", 15, FW_NORMAL, pal.itemFg, light, b1.X, b1.Y, b1.Width, b1.Height,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-    FillRound(g, b2, 9 * s, pal.primary);
-    SText(g, L"复制版本信息", 12.5f, FW_NORMAL, Gdiplus::Color(255, 255, 255, 255), true,
+    FillRound(g, b2, 11 * s, pal.primary);
+    SText(g, L"复制版本信息", 15, FW_NORMAL, Gdiplus::Color(255, 255, 255, 255), true,
         b2.X, b2.Y, b2.Width, b2.Height,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
     HitAdd((int)b1.X, (int)b1.Y, (int)b1.Width, (int)b1.Height, ACT_GITHUB);
     HitAdd((int)b2.X, (int)b2.Y, (int)b2.Width, (int)b2.Height, ACT_COPYVER);
 
-    SText(g, L"© 2026 Hydrogen Spec · 与轻键 / 轻韵同一套做法", 10.5f, FW_NORMAL,
-        pal.detail, light, x, y + 386 * s, w, 16 * s,
+    SText(g, L"© 2026 Hydrogen Spec · 与轻键 / 轻韵同一套做法", 12, FW_NORMAL,
+        pal.detail, light, x, by + bh + 20 * s, w, 18 * s,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 }
 
@@ -3348,85 +3353,76 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     Palette pal = MakePalette(g_lightText, 255);
     const bool light = pal.darkCard;   // light text == dark page
 
-    Gdiplus::RectF page((float)(12 * s), (float)(12 * s),
-        (float)(g_setW - 24 * s), (float)(g_setH - 24 * s));
+    // Full-bleed square background: the window corners are DWM's (see
+    // OpenSettings - DWMWCP_ROUND on Win11, plain square on older systems),
+    // and the drop shadow / show animation are the system's, not ours.
+    Gdiplus::RectF page(0, 0, (float)g_setW, (float)g_setH);
+    g.Clear(pal.page);
 
-    // shadow
-    for (int i = 8; i >= 1; i--) {
-        float pad = (float)i * 0.9f;
-        Gdiplus::GraphicsPath p;
-        AddRoundRect(p, Gdiplus::RectF(page.X - pad, page.Y - pad + 3.0f,
-            page.Width + pad * 2, page.Height + pad * 2), 16 * (float)s + pad);
-        Gdiplus::Pen pen(Gdiplus::Color(12, 0, 0, 0), 2.0f);
-        g.DrawPath(&pen, &p);
-    }
+    float px = 24 * (float)s;
+    float py = 14 * (float)s;
 
-    FillRound(g, page, 16 * (float)s, pal.page);
-
-    float px = page.X + 14 * s;
-    float py = page.Y + 12 * s;
-
-    // ---- title bar ----
+    // ---- title bar (drag region; only the close button is interactive) ----
     {
         Gdiplus::Bitmap* logo = light ? g_logoDark : g_logoLight;
         if (logo && logo->GetLastStatus() == Gdiplus::Ok)
-            g.DrawImage(logo, Gdiplus::RectF(px, py + 6 * s, 16 * s, 16 * s));
-        SText(g, L"轻谱 · 设置", 12.5f, FW_NORMAL, pal.detail, light,
-            px + 22 * s, py + 2 * s, 200 * s, 24 * s);
+            g.DrawImage(logo, Gdiplus::RectF(px, py + 4 * s, 22 * s, 22 * s));
+        SText(g, L"轻谱 · 设置", 14, FW_NORMAL, pal.detail, light,
+            px + 30 * s, py, 240 * s, 30 * s);
 
-        Gdiplus::RectF close(page.GetRight() - 40 * s, py + 1 * s, 28 * s, 26 * s);
-        if (g_setHot == ACT_CLOSE) FillRound(g, close, 7 * s, pal.chipBg);
-        Gdiplus::Pen cp(pal.detail, 1.4f);
+        Gdiplus::RectF close(page.GetRight() - 64 * s, py + 1 * s, 40 * s, 30 * s);
+        if (g_setHot == ACT_CLOSE) FillRound(g, close, 8 * s, pal.chipBg);
+        Gdiplus::Pen cp(pal.detail, 1.6f);
         cp.SetStartCap(Gdiplus::LineCapRound);
         cp.SetEndCap(Gdiplus::LineCapRound);
         float cxm = close.X + close.Width * 0.5f, cym = close.Y + close.Height * 0.5f;
-        float d5 = 5.0f * (float)s;
+        float d5 = 6.0f * (float)s;
         g.DrawLine(&cp, cxm - d5, cym - d5, cxm + d5, cym + d5);
         g.DrawLine(&cp, cxm + d5, cym - d5, cxm - d5, cym + d5);
         HitAdd((int)close.X, (int)close.Y, (int)close.Width, (int)close.Height, ACT_CLOSE);
     }
 
     // ---- sidebar ----
-    float navX = page.X + 12 * s;
-    float navY = page.Y + 46 * s;
+    float navX = 20 * (float)s;
+    float navY = 76 * (float)s;
     const wchar_t* navNames[3] = { L"外观", L"显示内容", L"关于" };
     for (int i = 0; i < 3; i++) {
-        Gdiplus::RectF item(navX, navY + i * 36 * s, 168 * s, 34 * s);
+        Gdiplus::RectF item(navX, navY + i * 54 * s, 200 * s, 46 * s);
         bool on = (g_setPage == i);
-        if (on) FillRound(g, item, 10 * s, pal.itemBg);
+        if (on) FillRound(g, item, 12 * s, pal.itemBg);
         Gdiplus::Color fg = on ? pal.itemFg : pal.detail;
-        DrawNavIcon(g, i == 2 ? 2 : i, item.X + 10 * s, item.Y + 9.5f * s, 15 * s, fg);
-        SText(g, navNames[i], 12.5f, FW_NORMAL, fg, light,
-            item.X + 33 * s, item.Y, item.Width - 40 * s, item.Height);
+        DrawNavIcon(g, i == 2 ? 2 : i, item.X + 14 * s, item.Y + 13 * s, 18 * s, fg);
+        SText(g, navNames[i], 15, FW_NORMAL, fg, light,
+            item.X + 46 * s, item.Y, item.Width - 56 * s, item.Height);
         HitAdd((int)item.X, (int)item.Y, (int)item.Width, (int)item.Height, ACT_NAV + i);
     }
 
     wchar_t foot[64];
     WPrintf(foot, 64, L"HSpec %s", kAppVersion);
-    SText(g, foot, 10.5f, FW_NORMAL, pal.detail, light, navX + 4 * s,
-        page.GetBottom() - 30 * s, 120 * s, 16 * s);
+    SText(g, foot, 12, FW_NORMAL, pal.detail, light, navX + 6 * s,
+        page.GetBottom() - 44 * s, 160 * s, 18 * s);
 
     // ---- content ----
-    float cxp = page.X + 194 * s;
-    float cyp = page.Y + 46 * s;
-    float cwp = page.Width - 194 * s - 16 * s;
+    float cxp = 240 * (float)s;
+    float cyp = 28 * (float)s;
+    float cwp = page.Width - 240 * s - 32 * s;
 
     // page heading with the theme's accent bar
     const wchar_t* titles[3] = { L"外观", L"显示内容", L"关于" };
     if (g_setPage != 2) {
-        FillRound(g, MRect(cxp, cyp + 4 * s, 3 * s, 15 * s), 2 * s, pal.primary);
-        SText(g, titles[g_setPage], 17, FW_NORMAL, pal.title, light, cxp + 11 * s, cyp,
-            cwp - 11 * s, 24 * s);
+        FillRound(g, MRect(cxp, cyp + 6 * s, 4 * s, 24 * s), 2 * s, pal.primary);
+        SText(g, titles[g_setPage], 24, FW_NORMAL, pal.title, light, cxp + 16 * s, cyp,
+            cwp - 16 * s, 32 * s);
         SText(g, g_setPage == 0 ? L"面板画在桌面层上，这里决定它离壁纸有多近"
                                 : L"关掉的项目不再出现在面板上",
-            11, FW_NORMAL, pal.detail, light, cxp + 11 * s, cyp + 24 * s,
-            cwp - 11 * s, 16 * s);
-        cyp += 48 * s;
+            14, FW_NORMAL, pal.detail, light, cxp + 16 * s, cyp + 34 * s,
+            cwp - 16 * s, 20 * s);
+        cyp += 68 * s;
     }
 
     if (g_setPage == 0) PageLook(g, pal, light, cxp, cyp, cwp, (float)s);
     else if (g_setPage == 1) PageContent(g, pal, light, cxp, cyp, cwp, (float)s);
-    else PageAbout(g, pal, light, cxp, cyp + 26 * s, cwp, (float)s);
+    else PageAbout(g, pal, light, cxp, cyp + 30 * s, cwp, (float)s);
 }
 
 static void SettingsPaint(Gdiplus::Graphics& g)
@@ -3454,67 +3450,13 @@ static bool SettingsSavePng(const wchar_t* path)
     return bmp.Save(path, &png, NULL) == Gdiplus::Ok;
 }
 
+// The settings window is a normal (non-layered) window painted on WM_PAINT;
+// "pushing" just invalidates.
 static bool SettingsPush(void)
 {
-    if (!g_setHwnd || g_setW <= 0 || g_setH <= 0) return false;
-
-    Gdiplus::Bitmap bmp(g_setW, g_setH, PixelFormat32bppPARGB);
-    if (bmp.GetLastStatus() != Gdiplus::Ok) return false;
-    {
-        Gdiplus::Graphics g(&bmp);
-        SettingsPaint(g);
-    }
-
-    Gdiplus::BitmapData bd;
-    Gdiplus::Rect lockRect(0, 0, g_setW, g_setH);
-    if (bmp.LockBits(&lockRect, Gdiplus::ImageLockModeRead,
-            PixelFormat32bppPARGB, &bd) != Gdiplus::Ok)
-        return false;
-
-    BITMAPINFO bi;
-    memset(&bi, 0, sizeof(bi));
-    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth = g_setW;
-    bi.bmiHeader.biHeight = -g_setH;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = NULL;
-    HBITMAP hbm = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-    if (hbm && bits) {
-        const BYTE* src = (const BYTE*)bd.Scan0;
-        int rowBytes = g_setW * 4;
-        for (int y = 0; y < g_setH; y++) {
-            int sy = (bd.Stride < 0) ? (g_setH - 1 - y) : y;
-            memcpy((BYTE*)bits + y * rowBytes, src + sy * (bd.Stride < 0 ? -bd.Stride : bd.Stride),
-                rowBytes);
-        }
-    }
-    bmp.UnlockBits(&bd);
-    if (!hbm) return false;
-
-    HDC screen = GetDC(NULL);
-    HDC mem = CreateCompatibleDC(screen);
-    HBITMAP old = (HBITMAP)SelectObject(mem, hbm);
-
-    BLENDFUNCTION bf;
-    bf.BlendOp = AC_SRC_OVER;
-    bf.BlendFlags = 0;
-    bf.SourceConstantAlpha = 255;
-    bf.AlphaFormat = AC_SRC_ALPHA;
-
-    SIZE size;
-    size.cx = g_setW;
-    size.cy = g_setH;
-    POINT srcPt = { 0, 0 };
-    BOOL ok = UpdateLayeredWindow(g_setHwnd, screen, NULL, &size, mem, &srcPt, 0, &bf, ULW_ALPHA);
-
-    SelectObject(mem, old);
-    DeleteDC(mem);
-    DeleteObject(hbm);
-    ReleaseDC(NULL, screen);
-    return ok != FALSE;
+    if (!g_setHwnd) return false;
+    InvalidateRect(g_setHwnd, NULL, FALSE);
+    return true;
 }
 
 static void SettingsInvalidate(void)
@@ -3662,12 +3604,28 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         return TRUE;
     }
 
+    case WM_NCCALCSIZE:
+        // Borderless: the client area is the whole window.  With WS_THICKFRAME
+        // this also kills the invisible resize frame (our WM_NCHITTEST below
+        // never returns a resize code either), keeping the size fixed.
+        if (wParam == TRUE) return 0;
+        break;
+
+    case WM_NCHITTEST: {
+        // Interactive controls get the client; everything else is the drag
+        // region - the window is borderless, so this is how it moves.
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ScreenToClient(hwnd, &pt);
+        if (HitTest(pt.x, pt.y) != ACT_NONE) return HTCLIENT;
+        return HTCAPTION;
+    }
+
     case WM_DPICHANGED: {
         g_setDpi = (UINT)HIWORD(wParam);
         if (g_setDpi == 0) g_setDpi = (UINT)LOWORD(wParam);
         double ds = SettingsScale();
-        g_setW = (int)((780.0 + 24.0) * ds + 0.5);
-        g_setH = (int)((580.0 + 24.0) * ds + 0.5);
+        g_setW = (int)(1024.0 * ds + 0.5);
+        g_setH = (int)(720.0 * ds + 0.5);
         RECT* target = (RECT*)lParam;
         SetWindowPos(hwnd, NULL, target->left, target->top, g_setW, g_setH,
             SWP_NOZORDER | SWP_NOACTIVATE);
@@ -3680,7 +3638,35 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 
     case WM_PAINT: {
         PAINTSTRUCT ps;
-        BeginPaint(hwnd, &ps);
+        HDC dc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        int w = rc.right - rc.left, h = rc.bottom - rc.top;
+        if (w > 0 && h > 0) {
+            HDC mem = CreateCompatibleDC(dc);
+            BITMAPINFO bi;
+            memset(&bi, 0, sizeof(bi));
+            bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bi.bmiHeader.biWidth = w;
+            bi.bmiHeader.biHeight = -h;
+            bi.bmiHeader.biPlanes = 1;
+            bi.bmiHeader.biBitCount = 32;
+            bi.bmiHeader.biCompression = BI_RGB;
+            void* bits = NULL;
+            HBITMAP hbm = mem ? CreateDIBSection(mem, &bi, DIB_RGB_COLORS,
+                &bits, NULL, 0) : NULL;
+            if (hbm && bits) {
+                HBITMAP old = (HBITMAP)SelectObject(mem, hbm);
+                {
+                    Gdiplus::Graphics g(mem);
+                    SettingsPaint(g);
+                }
+                BitBlt(dc, 0, 0, w, h, mem, 0, 0, SRCCOPY);
+                SelectObject(mem, old);
+            }
+            if (hbm) DeleteObject(hbm);
+            if (mem) DeleteDC(mem);
+        }
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -3798,8 +3784,8 @@ static void OpenSettings(void)
     UINT mdpi = MonitorDpi(mon);
     g_setDpi = mdpi ? mdpi : GetDpiSafe(g_hwnd);
     double s = SettingsScale();
-    g_setW = (int)((780.0 + 24.0) * s + 0.5);
-    g_setH = (int)((580.0 + 24.0) * s + 0.5);
+    g_setW = (int)(1024.0 * s + 0.5);
+    g_setH = (int)(720.0 * s + 0.5);
 
     WNDCLASSEXW wc;
     memset(&wc, 0, sizeof(wc));
@@ -3819,10 +3805,29 @@ static void OpenSettings(void)
     int x = mi.rcWork.left + ((mi.rcWork.right - mi.rcWork.left) - g_setW) / 2;
     int y = mi.rcWork.top + ((mi.rcWork.bottom - mi.rcWork.top) - g_setH) / 2;
 
-    g_setHwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW, kSettingsClass,
-        L"轻谱 · 设置", WS_POPUP, x, y, g_setW, g_setH, NULL, NULL,
-        GetModuleHandleW(NULL), NULL);
+    // Borderless but frame-aware: WS_THICKFRAME (invisible) + DWM corner
+    // preference gives the native Win11 rounded corners, drop shadow and
+    // show/hide animation.  Older systems just get square corners - we do
+    // not draw our own rounding.  The window is a normal window (not
+    // WS_EX_LAYERED) so the DWM animations stay alive.
+    g_setHwnd = CreateWindowExW(WS_EX_TOOLWINDOW, kSettingsClass,
+        L"轻谱 · 设置", WS_POPUP | WS_THICKFRAME, x, y, g_setW, g_setH,
+        NULL, NULL, GetModuleHandleW(NULL), NULL);
     if (!g_setHwnd) return;
+
+    {
+        typedef HRESULT (WINAPI *PFN_DwmSetWindowAttribute)(HWND, DWORD, LPCVOID, DWORD);
+        HMODULE dwm = LoadLibraryW(L"dwmapi.dll");
+        if (dwm) {
+            PFN_DwmSetWindowAttribute fn = (PFN_DwmSetWindowAttribute)
+                GetProcAddress(dwm, "DwmSetWindowAttribute");
+            if (fn) {
+                const DWORD kRound = 2;   // DWMWCP_ROUND
+                fn(g_setHwnd, 33 /* DWMWA_WINDOW_CORNER_PREFERENCE */,
+                    &kRound, sizeof(kRound));
+            }
+        }
+    }
 
     ShowWindow(g_setHwnd, SW_SHOW);
     SetForegroundWindow(g_setHwnd);
@@ -3973,10 +3978,32 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
 
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
 {
-    HANDLE mutex = CreateMutexW(NULL, FALSE, L"HSpec_Singleton");
-    if (mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
-        CloseHandle(mutex);
-        return 0;
+    // Headless --dump / --dump-settings runs are inspection renders: they
+    // must not trip the single-instance lock (an already-running HSpec on
+    // the desktop would silently swallow them and no dump gets written).
+    bool headlessDump = false;
+    {
+        int pargc = 0;
+        LPWSTR* pargv = CommandLineToArgvW(GetCommandLineW(), &pargc);
+        if (pargv) {
+            for (int i = 1; i < pargc; i++) {
+                if (wcscmp(pargv[i], L"--dump") == 0 ||
+                    wcscmp(pargv[i], L"--dump-settings") == 0) {
+                    headlessDump = true;
+                    break;
+                }
+            }
+            LocalFree(pargv);
+        }
+    }
+
+    HANDLE mutex = NULL;
+    if (!headlessDump) {
+        mutex = CreateMutexW(NULL, FALSE, L"HSpec_Singleton");
+        if (mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
+            CloseHandle(mutex);
+            return 0;
+        }
     }
 
     {
@@ -4051,8 +4078,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
         UINT mdpi = MonitorDpi(MonitorFromPoint(origin0, MONITOR_DEFAULTTOPRIMARY));
         g_setDpi = mdpi ? mdpi : GetDpiSafe(g_hwnd);
         double ds = SettingsScale();
-        g_setW = (int)((780.0 + 24.0) * ds + 0.5);
-        g_setH = (int)((580.0 + 24.0) * ds + 0.5);
+        g_setW = (int)(1024.0 * ds + 0.5);
+        g_setH = (int)(720.0 * ds + 0.5);
         g_setPage = g_settingsDumpPage;
         LoadLogoBitmaps();
         SettingsSavePng(g_settingsDumpPath);

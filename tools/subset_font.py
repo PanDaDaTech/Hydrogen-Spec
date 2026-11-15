@@ -1,9 +1,18 @@
 # -*- coding: utf-8 -*-
 """Rebuild the embedded MiSans subset and verify UI character coverage.
 
-The full MiSans-Medium.ttf (~8 MB) is not committed. Pass its path with
---full, or place it at build/font-backup/MiSans-Medium.ttf.
+One face is embedded: MiSans Medium (family "MiSans", usWeightClass 500).
+No bold anywhere: synthetic emboldening smears stems into grey fuzz once
+text is composited through per-pixel alpha, and a real bold face was
+explicitly rejected ("直接用 Medium 就行了").  Hierarchy comes from size
+and color only - keep every CreateFontW / DrawTextGpLine request at
+FW_NORMAL.
 
+The full font (~8 MB) is not committed. Place it at:
+
+    build/font-backup/MiSans-Medium.ttf
+
+Usage:
     python tools/subset_font.py --full path/to/MiSans-Medium.ttf
     python tools/subset_font.py --check
 
@@ -12,11 +21,6 @@ Collected characters:
   2. printable ASCII 0x20-0x7E;
   3. characters from tools/hardware_words.txt (Chinese vendor names and
      hardware vocabulary), unless --minimal is given.
-
-The UI deliberately uses no bold weight: GDI synthetic emboldening smears
-stems into grey fuzz once text is composited through per-pixel alpha, and
-a real bold face was rejected as well.  Hierarchy comes from size and
-color only - keep every CreateFontW weight at FW_NORMAL.
 
 At runtime, any dynamic line containing a character outside this set is
 drawn with the system CJK font instead (per-line fallback), so nothing is
@@ -27,9 +31,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "hspec.cpp"
+HARDWARE = ROOT / "tools" / "hardware_words.txt"
+
 TTF_OUT = ROOT / "winres" / "MiSans-Medium.ttf"
 TTF_FULL = ROOT / "build" / "font-backup" / "MiSans-Medium.ttf"
-HARDWARE = ROOT / "tools" / "hardware_words.txt"
 
 ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", '"': '"', "'": "'",
            "0": "\0", "a": "\a", "b": "\b", "f": "\f", "v": "\v"}
@@ -119,45 +124,34 @@ def _family_name(font):
     return None
 
 
-def main():
+def _fix_metadata(font):
+    """GDI / GDI+ match by family + weight; fix MiSans' non-standard metadata.
+
+    nameID 16/17 (typographic family/subfamily) would override nameID 1/2
+    on some stacks - drop them so the rewrite below always wins.
+    """
+    os2 = font["OS/2"]
+    os2.usWeightClass = 500
+    # fsSelection bits: 0x01 ITALIC, 0x20 BOLD, 0x40 REGULAR
+    os2.fsSelection = (os2.fsSelection & ~0x21) | 0x40
+
+    nametbl = font["name"]
+    nametbl.names = [r for r in nametbl.names
+                     if r.platformID == 3 and r.nameID not in (16, 17)]
+    for r in nametbl.names:
+        if r.nameID == 1:
+            r.string = "MiSans"
+        elif r.nameID == 2:
+            r.string = "Medium"
+
+
+def build(full, out):
     from fontTools.ttLib import TTFont
+    from fontTools import subset
 
-    check_only = "--check" in sys.argv
-    include_hardware = "--minimal" not in sys.argv
-    full = TTF_FULL
-    if "--full" in sys.argv:
-        full = Path(sys.argv[sys.argv.index("--full") + 1])
-
-    chars = collect(include_hardware)
+    chars = collect("--minimal" not in sys.argv)
     print("UI chars: %d" % len(chars))
 
-    if check_only:
-        font = TTFont(str(TTF_OUT))
-        cmap = font.getBestCmap()
-        missing = sorted(c for c in chars if ord(c) >= 0x80 and ord(c) not in cmap)
-        if missing:
-            print("[ERR] %d chars missing from the subset:" % len(missing))
-            for c in missing:
-                print("   U+%04X %s" % (ord(c), c))
-            return 1
-        os2 = font["OS/2"]
-        if os2.usWeightClass != 500 or not (os2.fsSelection & 0x40):
-            print("[ERR] OS/2 metadata is wrong (usWeightClass=%d fsSelection=0x%04X)"
-                  % (os2.usWeightClass, os2.fsSelection))
-            return 1
-        fam = _family_name(font)
-        if fam != "MiSans":
-            print("[ERR] family name is %r (expected MiSans)" % fam)
-            return 1
-        print("[OK] subset covers all UI chars (cmap %d, %d bytes)"
-              % (len(cmap), TTF_OUT.stat().st_size))
-        return 0
-
-    if not full.exists():
-        print("[ERR] full font not found: %s (use --full)" % full)
-        return 1
-
-    from fontTools import subset
     font = TTFont(str(full))
     options = subset.Options()
     options.name_IDs = ["*"]
@@ -168,22 +162,50 @@ def main():
     ss.populate(unicodes=[ord(c) for c in chars])
     ss.subset(font)
 
-    # GDI / GDI+ match by family + weight; fix MiSans' non-standard metadata.
+    _fix_metadata(font)
+
+    font.save(str(out))
+    print("[OK] wrote %s: %d chars, %d bytes (family MiSans, weight 500)"
+          % (out.relative_to(ROOT), len(chars), out.stat().st_size))
+
+
+def check(out):
+    from fontTools.ttLib import TTFont
+
+    chars = collect("--minimal" not in sys.argv)
+    font = TTFont(str(out))
+    cmap = font.getBestCmap()
+    missing = sorted(c for c in chars if ord(c) >= 0x80 and ord(c) not in cmap)
+    if missing:
+        print("[ERR] %d chars missing from the subset:" % len(missing))
+        for c in missing:
+            print("   U+%04X %s" % (ord(c), c))
+        return False
     os2 = font["OS/2"]
-    os2.usWeightClass = 500
-    os2.fsSelection = (os2.fsSelection & ~0x21) | 0x40
+    if os2.usWeightClass != 500 or (os2.fsSelection & 0x61) != 0x40:
+        print("[ERR] OS/2 metadata is wrong (usWeightClass=%d fsSelection=0x%04X)"
+              % (os2.usWeightClass, os2.fsSelection))
+        return False
+    fam = _family_name(font)
+    if fam != "MiSans":
+        print("[ERR] family name is %r (expected MiSans)" % fam)
+        return False
+    print("[OK] subset covers all UI chars (cmap %d, %d bytes)"
+          % (len(cmap), TTF_OUT.stat().st_size))
+    return True
 
-    nametbl = font["name"]
-    nametbl.names = [r for r in nametbl.names if r.platformID == 3]
-    for r in nametbl.names:
-        if r.nameID == 1:
-            r.string = "MiSans"
-        elif r.nameID == 2:
-            r.string = "Medium"
 
-    font.save(str(TTF_OUT))
-    print("[OK] wrote %s: %d chars, %d bytes"
-          % (TTF_OUT.relative_to(ROOT), len(chars), TTF_OUT.stat().st_size))
+def main():
+    if "--check" in sys.argv:
+        return 0 if check(TTF_OUT) else 1
+
+    full = TTF_FULL
+    if "--full" in sys.argv:
+        full = Path(sys.argv[sys.argv.index("--full") + 1])
+    if not full.exists():
+        print("[ERR] full font not found: %s (use --full)" % full)
+        return 1
+    build(full, TTF_OUT)
     return 0
 
 
