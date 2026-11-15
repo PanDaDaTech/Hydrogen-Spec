@@ -955,6 +955,133 @@ static int GpuActiveIndex(const GpuInfo* gpus, int gc)
     return -1;
 }
 
+// WinOSInfo-style graphics header: monitor model, size, mode and refresh.
+struct DisplayInfo {
+    wchar_t name[128];
+    double diagIn;        // 0 when unknown
+    int w, h, hz;
+    bool valid;
+};
+
+static void EdidProductName(const BYTE* edid, DWORD size, wchar_t* out, int cap)
+{
+    out[0] = 0;
+    if (size < 126) return;
+    for (int d = 0; d < 4; d++) {
+        const BYTE* p = edid + 54 + d * 18;
+        if (p[0] == 0 && p[1] == 0 && p[2] == 0 && p[3] == 0xFC) {
+            char name[14] = { 0 };
+            for (int i = 0; i < 13; i++) {
+                BYTE c = p[5 + i];
+                if (c == 0x0A || c == 0x00) break;
+                name[i] = (char)c;
+            }
+            MultiByteToWideChar(CP_ACP, 0, name, -1, out, cap);
+            TrimW(out);
+            return;
+        }
+    }
+}
+
+static bool GetDisplayInfo(DisplayInfo* out)
+{
+    memset(out, 0, sizeof(*out));
+    DISPLAY_DEVICEW adapter;
+    memset(&adapter, 0, sizeof(adapter));
+    adapter.cb = sizeof(adapter);
+    for (int i = 0; EnumDisplayDevicesW(NULL, i, &adapter, 0); i++) {
+        if (!(adapter.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) continue;
+
+        DEVMODEW dm;
+        memset(&dm, 0, sizeof(dm));
+        dm.dmSize = sizeof(dm);
+        if (EnumDisplaySettingsW(adapter.DeviceName, ENUM_CURRENT_SETTINGS, &dm)) {
+            out->w = (int)dm.dmPelsWidth;
+            out->h = (int)dm.dmPelsHeight;
+            out->hz = (int)dm.dmDisplayFrequency;
+            if (out->hz <= 1) out->hz = 0;
+        }
+
+        DISPLAY_DEVICEW mon;
+        memset(&mon, 0, sizeof(mon));
+        mon.cb = sizeof(mon);
+        if (EnumDisplayDevicesW(adapter.DeviceName, 0, &mon, 0)) {
+            if (mon.DeviceString[0] && !FindNoCase(mon.DeviceString, L"Generic PnP"))
+                wcsncpy_s(out->name, 128, mon.DeviceString, _TRUNCATE);
+
+            // EDID lives under the monitor's Enum key (DeviceID minus the
+            // class-GUID tail) and gives the product name plus panel size.
+            wchar_t id[256];
+            wcsncpy_s(id, 256, mon.DeviceID, _TRUNCATE);
+            wchar_t* guid = wcsstr(id, L"\\{");
+            if (guid) *guid = 0;
+            wchar_t sub[320];
+            WPrintf(sub, 320, L"SYSTEM\\CurrentControlSet\\Enum\\%s\\Device Parameters", id);
+            HKEY key = NULL;
+            if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, sub, 0, KEY_READ, &key) == ERROR_SUCCESS) {
+                BYTE edid[256];
+                DWORD type = 0, size = sizeof(edid);
+                if (RegQueryValueExW(key, L"EDID", NULL, &type, edid, &size) == ERROR_SUCCESS) {
+                    if (!out->name[0]) EdidProductName(edid, size, out->name, 128);
+                    if (size >= 23 && edid[21] > 0 && edid[22] > 0) {
+                        double cw = edid[21], ch = edid[22];
+                        out->diagIn = sqrt(cw * cw + ch * ch) / 2.54;
+                    }
+                }
+                RegCloseKey(key);
+            }
+        }
+        out->valid = (out->w > 0);
+        return out->valid;
+    }
+    return false;
+}
+
+// Dedicated VRAM from the display-class registry key, matched back through
+// the PCI vendor/device id.  0 when the driver does not report it.
+static unsigned long long GpuVramBytes(const wchar_t* key8)
+{
+    if (!key8 || !key8[0]) return 0;
+    wchar_t needle[32];
+    WPrintf(needle, 32, L"VEN_%c%c%c%c&DEV_%c%c%c%c",
+        key8[0], key8[1], key8[2], key8[3], key8[4], key8[5], key8[6], key8[7]);
+    HKEY root = NULL;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+            L"SYSTEM\\CurrentControlSet\\Control\\Class\\{4d36e968-e325-11ce-bfc1-08002be10318}",
+            0, KEY_READ, &root) != ERROR_SUCCESS)
+        return 0;
+    unsigned long long best = 0;
+    for (int i = 0; i < 24 && !best; i++) {
+        wchar_t name[8];
+        WPrintf(name, 8, L"%04d", i);
+        HKEY sub = NULL;
+        if (RegOpenKeyExW(root, name, 0, KEY_READ, &sub) != ERROR_SUCCESS) continue;
+        wchar_t mid[256] = { 0 };
+        DWORD type = 0, size = sizeof(mid);
+        if (RegQueryValueExW(sub, L"MatchingDeviceId", NULL, &type, (LPBYTE)mid, &size) == ERROR_SUCCESS
+                && FindNoCase(mid, needle)) {
+            unsigned long long v = 0;
+            size = sizeof(v);
+            if (RegQueryValueExW(sub, L"HardwareInformation.qwMemorySize", NULL, &type,
+                    (LPBYTE)&v, &size) == ERROR_SUCCESS && size == 8)
+                best = v;
+        }
+        RegCloseKey(sub);
+    }
+    RegCloseKey(root);
+    return best;
+}
+
+static void FormatVram(unsigned long long bytes, wchar_t* out, int cap)
+{
+    out[0] = 0;
+    if (bytes == 0) return;
+    if (bytes >= (1ull << 30))
+        WPrintf(out, cap, L"%lluGB", (bytes + (1ull << 29)) >> 30);
+    else
+        WPrintf(out, cap, L"%lluMB", (bytes + (1ull << 19)) >> 20);
+}
+
 static int EnumGpus(GpuInfo* out, int cap)
 {
     GUID guid = { 0x4d36e968, 0xe325, 0x11ce,
@@ -1290,8 +1417,8 @@ static int EnumNics(NicInfo* out, int cap)
 // Configuration and palette
 // ===========================================================================
 
-enum { THEME_PLAIN = 0, THEME_CARD = 1, THEME_ETHEREAL = 2, THEME_SPLIT = 3 };
-enum { THEME_COUNT = 4 };
+enum { THEME_PLAIN = 0, THEME_ETHEREAL = 1, THEME_SPLIT = 2 };
+enum { THEME_COUNT = 3 };
 
 struct Config
 {
@@ -1301,9 +1428,11 @@ struct Config
     int opacity;
     int radius;
     int showCpu, showBoard, showMem, showDisk, showGpu, showNet;
+    int lightMode;   // 0 auto, 1 light, 2 dark
+    int posDx, posDy; // panel offset in dp
 };
 
-static Config g_cfg = { THEME_PLAIN, 1, 250, 88, 16, 1, 1, 1, 1, 1, 1 };
+static Config g_cfg = { THEME_PLAIN, 1, 250, 88, 16, 1, 1, 1, 1, 1, 1, 0, 0, 0 };
 static wchar_t g_iniPath[MAX_PATH] = { 0 };
 
 static int ClampInt(int v, int lo, int hi)
@@ -1370,7 +1499,13 @@ static void LoadConfig(void)
 {
     ResolveIniPath();
     if (!g_iniPath[0]) return;
-    g_cfg.theme = ClampInt((int)GetPrivateProfileIntW(L"panel", L"theme", g_cfg.theme, g_iniPath), 0, THEME_COUNT - 1);
+    g_cfg.theme = (int)GetPrivateProfileIntW(L"panel", L"theme", g_cfg.theme, g_iniPath);
+    // Migrate the old 4-theme numbering (0 plain, 1 light card, 2 ethereal,
+    // 3 split) - light card is gone, so 1 and 2 both land on the card theme.
+    if (g_cfg.theme == 3) g_cfg.theme = THEME_SPLIT;
+    else if (g_cfg.theme == 2 || g_cfg.theme == 1) g_cfg.theme = THEME_ETHEREAL;
+    else g_cfg.theme = THEME_PLAIN;
+    g_cfg.theme = ClampInt(g_cfg.theme, 0, THEME_COUNT - 1);
     g_cfg.hueFollow = ClampInt((int)GetPrivateProfileIntW(L"panel", L"hueFollow", g_cfg.hueFollow, g_iniPath), 0, 1);
     g_cfg.hue = ClampInt((int)GetPrivateProfileIntW(L"panel", L"hue", g_cfg.hue, g_iniPath), 0, 360);
     g_cfg.opacity = ClampInt((int)GetPrivateProfileIntW(L"panel", L"opacity", g_cfg.opacity, g_iniPath), 40, 100);
@@ -1381,6 +1516,9 @@ static void LoadConfig(void)
     g_cfg.showDisk = ClampInt((int)GetPrivateProfileIntW(L"panel", L"disk", g_cfg.showDisk, g_iniPath), 0, 1);
     g_cfg.showGpu = ClampInt((int)GetPrivateProfileIntW(L"panel", L"gpu", g_cfg.showGpu, g_iniPath), 0, 1);
     g_cfg.showNet = ClampInt((int)GetPrivateProfileIntW(L"panel", L"net", g_cfg.showNet, g_iniPath), 0, 1);
+    g_cfg.lightMode = ClampInt((int)GetPrivateProfileIntW(L"panel", L"lightMode", g_cfg.lightMode, g_iniPath), 0, 2);
+    g_cfg.posDx = ClampInt((int)GetPrivateProfileIntW(L"panel", L"posDx", g_cfg.posDx, g_iniPath), -400, 400);
+    g_cfg.posDy = ClampInt((int)GetPrivateProfileIntW(L"panel", L"posDy", g_cfg.posDy, g_iniPath), -400, 400);
 }
 
 static void SaveConfig(void)
@@ -1400,6 +1538,9 @@ static void SaveConfig(void)
         { L"disk", g_cfg.showDisk },
         { L"gpu", g_cfg.showGpu },
         { L"net", g_cfg.showNet },
+        { L"lightMode", g_cfg.lightMode },
+        { L"posDx", g_cfg.posDx },
+        { L"posDy", g_cfg.posDy },
     };
     for (int i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++) {
         WPrintf(buf, 16, L"%d", items[i].value);
@@ -1712,32 +1853,53 @@ static void BuildModel(void)
         }
     }
 
-    // ---- GPU ----
-    // One section per machine, not per adapter: the title is the GPU that is
-    // actually driving the desktop (in WinPE there is no desktop, so the
-    // discrete adapter wins).  Any second GPU folds into a detail line.
+    // ---- GPU / display (WinOSInfo layout) ----
+    // Title line carries the display (model, size, mode, refresh); every
+    // adapter is then listed as a numbered line with its VRAM.  No "另一块"
+    // wording: the numbering is the structure.
     g_skipSection = !g_cfg.showGpu;
     GpuInfo gpus[4];
     int gc = EnumGpus(gpus, 4);
     if (gc > 0) {
+        // Order: in-use GPU first (WinPE has no desktop -> discrete first,
+        // which EnumGpus already sorts by).
+        int order[4];
         int act = GpuActiveIndex(gpus, gc);
         if (act < 0) {
-            act = 0;   // discrete-first: EnumGpus sorted by GpuRank
+            act = 0;
             for (int i = 0; i < gc; i++)
                 if (gpus[i].rank == 0) { act = i; break; }
         }
+        order[0] = act;
+        for (int i = 0, n = 1; i < gc; i++)
+            if (i != act) order[n++] = i;
+
         wchar_t title[256];
-        WPrintf(title, 256, L"显卡: %s", gpus[act].name);
+        DisplayInfo di;
+        if (GetDisplayInfo(&di) && di.name[0]) {
+            wchar_t size[32] = { 0 };
+            if (di.diagIn > 3.0) WPrintf(size, 32, L"%.1f\"", di.diagIn);
+            wchar_t mode[80] = { 0 };
+            if (di.w > 0 && di.hz > 0) WPrintf(mode, 80, L"%dx%d %dHz", di.w, di.h, di.hz);
+            else if (di.w > 0) WPrintf(mode, 80, L"%dx%d", di.w, di.h);
+            if (size[0] && mode[0])
+                WPrintf(title, 256, L"显卡: %s %s %s", di.name, size, mode);
+            else if (mode[0])
+                WPrintf(title, 256, L"显卡: %s %s", di.name, mode);
+            else
+                WPrintf(title, 256, L"显卡: %s", di.name);
+        } else {
+            WPrintf(title, 256, L"显卡: %s", gpus[act].name);
+        }
         r = ModelAddRow(ICON_GPU, title);
-        if (gc > 1) {
-            wchar_t rest[512] = { 0 };
-            for (int i = 0; i < gc; i++) {
-                if (i == act) continue;
-                if (rest[0]) wcscat_s(rest, 512, L" / ");
-                wcscat_s(rest, 512, gpus[i].name);
-            }
-            wchar_t d[576];
-            WPrintf(d, 576, L"另一块: %s", rest);
+        for (int i = 0; i < gc; i++) {
+            wchar_t vram[32];
+            FormatVram(GpuVramBytes(gpus[order[i]].key), vram, 32);
+            wchar_t d[320];
+            if (vram[0])
+                WPrintf(d, 320, L"%d. %s %s", i + 1, gpus[order[i]].name, vram);
+            else
+                WPrintf(d, 320, L"%d. %s", i + 1, gpus[order[i]].name);
             ModelAddDetail(r, d);
         }
     }
@@ -1829,6 +1991,12 @@ static int g_winH = 320;
 // the fade only re-blends instead of re-rendering text.
 static int g_hoverAlpha = 255, g_hoverTarget = 255;
 static HBITMAP g_pushBmp = NULL;
+// Time-driven fade: remember where the fade started so each tick interpolates
+// from real elapsed time instead of a fixed step (a fixed step stutters badly
+// whenever a WM_TIMER is late or coalesced).
+static ULONGLONG g_fadeStartTick = 0;
+static int g_fadeStartAlpha = 255;
+static const ULONGLONG kFadeMs = 150;
 static bool g_fontReady = false;
 static HANDLE g_fontReg = NULL;
 // GDI+ cannot see fonts registered with AddFontMemResourceEx, so the same
@@ -1923,6 +2091,22 @@ static int PanelMarginY(void) { return (int)(22.0 * g_scale + 0.5); }
 static void RefreshWallpaperCache(void);
 
 // Pick dark or light text from the wallpaper brightness behind the panel.
+// Dark-card flag for the settings window and the card themes.  lightMode:
+// 0 follow the system apps theme (wallpaper luminance as the fallback),
+// 1 force light, 2 force dark.  The plain panel keeps its own wallpaper
+// contrast so its text stays readable over any background.
+static bool EffectiveDark(void)
+{
+    if (g_cfg.lightMode == 1) return false;
+    if (g_cfg.lightMode == 2) return true;
+    DWORD v = 1;
+    if (RegDwordW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+            L"AppsUseLightTheme", &v))
+        return v == 0;
+    return g_lightText;
+}
+
 // Wallpaper sampling (full decode + 100 GetPixel) is expensive; cache it on
 // (wallpaper stamp, panel geometry).  Slider drags re-render every tick and
 // must never land in here.
@@ -2070,7 +2254,9 @@ static int g_titleH = 24, g_detailH = 21, g_rowGap = 9, g_iconSize = 24, g_gapX 
 static int g_cardMargin = 10, g_padX = 18, g_padY = 15, g_chipSize = 30;
 
 static bool CardMode(void) { return g_cfg.theme != THEME_PLAIN; }
-static bool CardBlur(void) { return g_cfg.theme == THEME_ETHEREAL; }
+// Both remaining card themes (卡片 / 分离卡片) share the translucent
+// blurred-wallpaper background.
+static bool CardBlur(void) { return g_cfg.theme != THEME_PLAIN; }
 
 static void ComputeLayout(void)
 {
@@ -2151,7 +2337,7 @@ static void AddRoundRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rc, 
 }
 
 // ---------------------------------------------------------------------------
-// Card layer (THEME_CARD / THEME_ETHEREAL)
+// Card layer (THEME_ETHEREAL / THEME_SPLIT)
 // ---------------------------------------------------------------------------
 //
 // GDI+ has no backdrop blur. The panel sits on the desktop layer, so its
@@ -2672,7 +2858,10 @@ static bool RenderInternal(void)
 
     const bool card = CardMode();
     const int cardAlpha = ClampInt(g_cfg.opacity, 40, 100) * 255 / 100;
-    Palette pal = MakePalette(g_lightText, cardAlpha);
+    // Card themes follow 明暗模式; the plain theme keeps its own wallpaper
+    // contrast so its text stays readable over any background.
+    bool darkCard = card ? EffectiveDark() : g_lightText;
+    Palette pal = MakePalette(darkCard, cardAlpha);
 
     const Gdiplus::Color titleColor = card ? pal.title : g_titleColor;
     const Gdiplus::Color detailColor = card ? pal.detail : g_detailColor;
@@ -2905,9 +3094,12 @@ static void PositionWindow(void)
 
     int marginX = PanelMarginX();
     int marginY = PanelMarginY();
-    int x = mi.rcMonitor.right - g_winW - marginX;
-    int y = mi.rcMonitor.top + marginY;
+    int x = mi.rcMonitor.right - g_winW - marginX + (int)(g_cfg.posDx * g_scale + 0.5);
+    int y = mi.rcMonitor.top + marginY + (int)(g_cfg.posDy * g_scale + 0.5);
     if (x < mi.rcMonitor.left) x = mi.rcMonitor.left;
+    if (y < mi.rcMonitor.top) y = mi.rcMonitor.top;
+    if (x + g_winW > mi.rcMonitor.right) x = mi.rcMonitor.right - g_winW;
+    if (y + g_winH > mi.rcMonitor.bottom) y = mi.rcMonitor.bottom - g_winH;
 
     SetWindowPos(g_hwnd, NULL, x, y, g_winW, g_winH,
         SWP_NOZORDER | SWP_NOACTIVATE);
@@ -3063,9 +3255,12 @@ enum
     ACT_HUE_STRIP = 31,
     ACT_OPACITY = 32,
     ACT_RADIUS = 33,
+    ACT_LIGHT = 34,      // + 0 follow / 1 light / 2 dark
+    ACT_SWATCH = 36,     // + 0 wallpaper, 1..5 preset hue
     ACT_TOGGLE = 40,     // + toggle index
     ACT_GITHUB = 50,
     ACT_COPYVER = 51,
+    ACT_POS = 60,        // + 0 up / 1 down / 2 left / 3 right / 4 reset
 };
 
 enum { TOGGLE_CPU = 0, TOGGLE_BOARD, TOGGLE_MEM, TOGGLE_DISK, TOGGLE_GPU, TOGGLE_NET, TOGGLE_COUNT };
@@ -3251,6 +3446,10 @@ static void DrawHueStrip(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, float h
 static void DrawThemeThumb(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int kind,
     const Palette& pal, float s)
 {
+    // Theme ids changed when 轻卡片 was removed: 1 (卡片) draws like the old
+    // ethereal thumb (kind 2 below), 2 (分离卡片) like the old split (kind 3).
+    int k = (kind == 1) ? 2 : (kind == 2) ? 3 : 0;
+    kind = k;
     Gdiplus::GraphicsPath path;
     AddRoundRect(path, rc, 9 * s);
     Gdiplus::Region saved;
@@ -3378,6 +3577,118 @@ static void DrawNavIcon(Gdiplus::Graphics& g, int kind, float x, float y, float 
 // Pages
 // ---------------------------------------------------------------------------
 
+// Circular icon chip used on every settings row (PanDa-style).
+static void DrawRowIcon(Gdiplus::Graphics& g, int kind, float cx, float cy,
+    float r, const Palette& pal)
+{
+    Gdiplus::SolidBrush bg(pal.chipBg);
+    g.FillEllipse(&bg, cx - r, cy - r, r * 2, r * 2);
+    Gdiplus::Pen pen(pal.chipFg, 1.5f);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+    float u = r / 12.0f;
+    switch (kind) {
+    case 0:   // light/dark: contrast circle
+        g.DrawEllipse(&pen, cx - 7 * u, cy - 7 * u, 14 * u, 14 * u);
+        {
+            Gdiplus::GraphicsPath half;
+            half.AddArc(cx - 7 * u, cy - 7 * u, 14 * u, 14 * u, -90.0f, 180.0f);
+            Gdiplus::SolidBrush fill(pal.chipFg);
+            g.FillPath(&fill, &half);
+        }
+        break;
+    case 1:   // hue: palette droplet
+        g.DrawEllipse(&pen, cx - 7 * u, cy - 7 * u, 14 * u, 14 * u);
+        {
+            Gdiplus::SolidBrush dot(pal.chipFg);
+            g.FillEllipse(&dot, cx - 3.2f * u, cy - 3.2f * u, 6.4f * u, 6.4f * u);
+        }
+        break;
+    case 2:   // radius: rounded square
+        {
+            Gdiplus::GraphicsPath sq;
+            AddRoundRect(sq, Gdiplus::RectF(cx - 7 * u, cy - 7 * u, 14 * u, 14 * u), 5 * u);
+            g.DrawPath(&pen, &sq);
+        }
+        break;
+    case 3:   // opacity: two stacked sheets
+        {
+            Gdiplus::GraphicsPath s1;
+            AddRoundRect(s1, Gdiplus::RectF(cx - 7 * u, cy - 5.5f * u, 10 * u, 10 * u), 2.5f * u);
+            g.DrawPath(&pen, &s1);
+            Gdiplus::GraphicsPath s2;
+            AddRoundRect(s2, Gdiplus::RectF(cx - 2.5f * u, cy - 8 * u, 10 * u, 10 * u), 2.5f * u);
+            Gdiplus::SolidBrush fill(pal.chipBg);
+            g.FillPath(&fill, &s2);
+            g.DrawPath(&pen, &s2);
+        }
+        break;
+    default:  // position: four-way move arrows
+        g.DrawLine(&pen, cx - 7 * u, cy, cx + 7 * u, cy);
+        g.DrawLine(&pen, cx, cy - 7 * u, cx, cy + 7 * u);
+        g.DrawLine(&pen, cx - 7 * u, cy, cx - 4 * u, cy - 3 * u);
+        g.DrawLine(&pen, cx - 7 * u, cy, cx - 4 * u, cy + 3 * u);
+        g.DrawLine(&pen, cx + 7 * u, cy, cx + 4 * u, cy - 3 * u);
+        g.DrawLine(&pen, cx + 7 * u, cy, cx + 4 * u, cy + 3 * u);
+        g.DrawLine(&pen, cx, cy - 7 * u, cx - 3 * u, cy - 4 * u);
+        g.DrawLine(&pen, cx, cy - 7 * u, cx + 3 * u, cy - 4 * u);
+        g.DrawLine(&pen, cx, cy + 7 * u, cx - 3 * u, cy + 4 * u);
+        g.DrawLine(&pen, cx, cy + 7 * u, cx + 3 * u, cy + 4 * u);
+        break;
+    }
+}
+
+// Segmented control (跟随系统 / 浅色 / 深色 style). Returns per-segment hit rects.
+static void DrawSegmented(Gdiplus::Graphics& g, const Gdiplus::RectF& rc,
+    const wchar_t* const* labels, int n, int sel, const Palette& pal, bool light,
+    int actBase)
+{
+    double s = SettingsScale();
+    FillRound(g, rc, rc.Height * 0.5f, pal.chipBg);
+    float segW = rc.Width / (float)n;
+    for (int i = 0; i < n; i++) {
+        Gdiplus::RectF seg(rc.X + i * segW, rc.Y, segW, rc.Height);
+        if (i == sel) {
+            Gdiplus::RectF pill(seg.X + 3, seg.Y + 3, seg.Width - 6, seg.Height - 6);
+            FillRound(g, pill, pill.Height * 0.5f, pal.card);
+            Gdiplus::Pen ring(pal.primary, 1.2f * (float)s);
+            Gdiplus::GraphicsPath rp;
+            AddRoundRect(rp, pill, pill.Height * 0.5f);
+            g.DrawPath(&ring, &rp);
+        }
+        Gdiplus::Color fg = (i == sel) ? pal.itemFg : pal.detail;
+        SText(g, labels[i], 13.5f, FW_NORMAL, fg, light,
+            seg.X, seg.Y, seg.Width, seg.Height,
+            DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        HitAdd((int)seg.X, (int)seg.Y, (int)seg.Width, (int)seg.Height, actBase + i);
+    }
+}
+
+// Value pill ("300 °" / "16 px").
+static void DrawValuePill(Gdiplus::Graphics& g, const Gdiplus::RectF& rc,
+    const wchar_t* text, const Palette& pal, bool light)
+{
+    FillRound(g, rc, rc.Height * 0.5f, pal.chipBg);
+    SText(g, text, 13, FW_NORMAL, pal.itemFg, light, rc.X, rc.Y, rc.Width, rc.Height,
+        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+}
+
+// Outlined action button (上移 / 默认位置 style).
+static void DrawTextButton(Gdiplus::Graphics& g, const Gdiplus::RectF& rc,
+    const wchar_t* text, const Palette& pal, bool light, bool hot, int act)
+{
+    double s = SettingsScale();
+    if (hot) FillRound(g, rc, 10 * s, pal.itemBg);
+    Gdiplus::Pen border(hot ? pal.primary : pal.divider, 1.2f * (float)s);
+    Gdiplus::GraphicsPath rp;
+    AddRoundRect(rp, rc, 10 * s);
+    g.DrawPath(&border, &rp);
+    SText(g, text, 14, FW_NORMAL, pal.title, light, rc.X, rc.Y, rc.Width, rc.Height,
+        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    HitAdd((int)rc.X, (int)rc.Y, (int)rc.Width, (int)rc.Height, act);
+}
+
 static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float x, float y, float w, float s)
 {
@@ -3385,20 +3696,21 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     Gdiplus::Color sub = pal.detail;
 
     // --- 主题 ---
-    const wchar_t* names[4] = { L"纯文字", L"轻卡片", L"卡片", L"分离卡片" };
-    float gap = 14 * s;
-    float tileW = (w - 40 * s - 3 * gap) / 4.0f;
-    float thumbH = tileW * 84.0f / 161.0f;
-    float cardH1 = pad + 26 * s + 30 * s + thumbH + 8 * s + 24 * s + pad;
+    const wchar_t* names[3] = { L"纯文字", L"卡片", L"分离卡片" };
+    float gap = 16 * s;
+    float tileW = (w - 40 * s - 2 * gap) / 3.0f;
+    float thumbH = tileW * 72.0f / 161.0f;
+    if (thumbH > 92 * s) thumbH = 92 * s;
+    float cardH1 = pad + 22 * s + 26 * s + thumbH + 6 * s + 22 * s + pad;
     Gdiplus::RectF cardC1(x, y, w, cardH1);
     FillRound(g, cardC1, 14 * s, pal.card);
     float cy = y + pad;
     SText(g, L"主题", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy, w - 40 * s, 24 * s);
+    cy += 22 * s;
+    SText(g, L"同一个信息模型，三种渲染层", 13.5f, FW_NORMAL, sub, light,
+        x + 20 * s, cy, w - 40 * s, 18 * s);
     cy += 26 * s;
-    SText(g, L"同一个信息模型，四种渲染层", 14, FW_NORMAL, sub, light,
-        x + 20 * s, cy, w - 40 * s, 20 * s);
-    cy += 30 * s;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 3; i++) {
         float tx = x + 20 * s + i * (tileW + gap);
         Gdiplus::RectF thumb(tx, cy, tileW, thumbH);
         DrawThemeThumb(g, thumb, i, pal, s);
@@ -3409,76 +3721,134 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
                 thumb.Width + 5 * s, thumb.Height + 5 * s), 13 * s);
             g.DrawPath(&ring, &p);
         }
-        Gdiplus::Color capColor = (g_cfg.theme == i) ? pal.itemFg : sub;
-        SText(g, names[i], 14, FW_NORMAL, capColor, light,
-            tx, cy + thumbH + 8 * s, tileW - 22 * s, 22 * s);
-        // radio dot
-        float dotR = 6.5f * s;
-        float dx = tx + tileW - dotR * 2, dy = cy + thumbH + 8 * s + (22 * s - dotR * 2) * 0.5f;
-        Gdiplus::Pen dotPen((g_cfg.theme == i) ? pal.primary : pal.chipBg, 1.8f * s);
-        g.DrawEllipse(&dotPen, dx, dy, dotR * 2, dotR * 2);
-        if (g_cfg.theme == i) {
-            Gdiplus::SolidBrush dotB(pal.primary);
-            g.FillEllipse(&dotB, dx + 3.5f * s, dy + 3.5f * s, dotR * 2 - 7 * s, dotR * 2 - 7 * s);
-        }
-        HitAdd((int)tx, (int)thumb.Y, (int)tileW, (int)(thumb.Height + 32 * s), ACT_THEME + i);
+        // selected state is the ring around the thumb + accent caption
+        Gdiplus::Color capColor = (g_cfg.theme == i) ? pal.primary : sub;
+        SText(g, names[i], 13.5f, FW_NORMAL, capColor, light,
+            tx, cy + thumbH + 6 * s, tileW, 22 * s,
+            DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        HitAdd((int)tx, (int)thumb.Y, (int)tileW, (int)(thumb.Height + 28 * s), ACT_THEME + i);
     }
 
-    // --- 主色 ---
-    float y2 = cardC1.GetBottom() + 14 * s;
-    Gdiplus::RectF cardC2(x, y2, w, 172 * s);
+    // --- 取色与明暗（one card, icon rows） ---
+    float y2 = cardC1.GetBottom() + 12 * s;
+    float rowsH = 44 * s + 58 * s + 44 * s + 44 * s;
+    Gdiplus::RectF cardC2(x, y2, w, pad * 2 + rowsH);
     FillRound(g, cardC2, 14 * s, pal.card);
-    float cy2 = y2 + pad;
-    SText(g, L"主色", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy2, w - 40 * s, 24 * s);
-    cy2 += 28 * s;
+    float ry = y2 + pad;
 
-    SText(g, L"跟随壁纸取色", 15, FW_NORMAL, pal.title, light, x + 20 * s, cy2,
-        w - 140 * s, 22 * s);
-    SText(g, L"从壁纸采样主色，换算成 oklch 的 hue", 13.5f, FW_NORMAL, sub, light,
-        x + 20 * s, cy2 + 22 * s, w - 140 * s, 18 * s);
-    Gdiplus::RectF sw(x + w - 20 * s - 44 * s, cy2 + 2 * s, 44 * s, 24 * s);
-    DrawSwitch(g, sw, g_cfg.hueFollow != 0, pal);
-    HitAdd((int)sw.X, (int)sw.Y, (int)sw.Width, (int)sw.Height, ACT_HUE_FOLLOW);
+    // 明暗模式
+    DrawRowIcon(g, 0, x + 20 * s + 15 * s, ry + 15 * s, 15 * s, pal);
+    SText(g, L"明暗模式", 15, FW_NORMAL, pal.title, light, x + 62 * s, ry,
+        160 * s, 30 * s);
+    const wchar_t* lightLabels[3] = { L"跟随系统", L"浅色", L"深色" };
+    Gdiplus::RectF seg(x + w - 20 * s - 300 * s, ry + 1 * s, 300 * s, 28 * s);
+    DrawSegmented(g, seg, lightLabels, 3, g_cfg.lightMode, pal, light, ACT_LIGHT);
+    ry += 44 * s;
 
-    float hueY = cy2 + 52 * s;
-    Gdiplus::RectF hue(x + 20 * s, hueY, w - 40 * s, 22 * s);
-    DrawHueStrip(g, hue, (float)HueDeg(), pal);
-    g_hueTrack = RECT{ (LONG)hue.X, (LONG)hue.Y, (LONG)hue.GetRight(), (LONG)hue.GetBottom() };
-    HitAdd((int)hue.X - 4, (int)hue.Y - 6, (int)hue.Width + 8, (int)hue.Height + 12, ACT_HUE_STRIP);
+    // 主题色相: swatches then slider
+    DrawRowIcon(g, 1, x + 20 * s + 15 * s, ry + 15 * s, 15 * s, pal);
+    SText(g, L"主题色相", 15, FW_NORMAL, pal.title, light, x + 62 * s, ry,
+        160 * s, 30 * s);
+    {
+        static const int kHueSwatch[5] = { 250, 190, 160, 300, 20 };
+        float swY = ry + 2 * s;
+        float swSz = 26 * s, swGap = 10 * s;
+        float sx = x + 232 * s;
+        {
+            Gdiplus::RectF chip(sx, swY, swSz, swSz);
+            Gdiplus::LinearGradientBrush gb(Gdiplus::PointF(chip.X, chip.Y),
+                Gdiplus::PointF(chip.GetRight(), chip.GetBottom()),
+                Gdiplus::Color(255, 84, 110, 158), Gdiplus::Color(255, 214, 158, 96));
+            Gdiplus::GraphicsPath cp;
+            AddRoundRect(cp, chip, 8 * s);
+            g.FillPath(&gb, &cp);
+            if (g_cfg.hueFollow) {
+                Gdiplus::Pen ring(pal.primary, 2.0f * s);
+                Gdiplus::GraphicsPath rp;
+                AddRoundRect(rp, Gdiplus::RectF(chip.X - 2.5f * s, chip.Y - 2.5f * s,
+                    chip.Width + 5 * s, chip.Height + 5 * s), 10 * s);
+                g.DrawPath(&ring, &rp);
+            }
+            HitAdd((int)chip.X - 4, (int)chip.Y - 4, (int)chip.Width + 8, (int)chip.Height + 8,
+                ACT_SWATCH + 0);
+        }
+        sx += swSz + swGap;
+        for (int i = 0; i < 5; i++) {
+            Gdiplus::RectF chip(sx, swY, swSz, swSz);
+            Gdiplus::Color c = OklchColor(0.70, 0.13, (double)kHueSwatch[i], 255);
+            Gdiplus::SolidBrush cb(c);
+            Gdiplus::GraphicsPath cp;
+            AddRoundRect(cp, chip, 8 * s);
+            g.FillPath(&cb, &cp);
+            bool on = (!g_cfg.hueFollow && g_cfg.hue == kHueSwatch[i]);
+            if (on) {
+                Gdiplus::Pen ring(pal.primary, 2.0f * s);
+                Gdiplus::GraphicsPath rp;
+                AddRoundRect(rp, Gdiplus::RectF(chip.X - 2.5f * s, chip.Y - 2.5f * s,
+                    chip.Width + 5 * s, chip.Height + 5 * s), 10 * s);
+                g.DrawPath(&ring, &rp);
+            }
+            HitAdd((int)chip.X - 4, (int)chip.Y - 4, (int)chip.Width + 8, (int)chip.Height + 8,
+                ACT_SWATCH + 1 + i);
+            sx += swSz + swGap;
+        }
+    }
+    ry += 32 * s;
+    {
+        wchar_t hueText[32];
+        WPrintf(hueText, 32, L"%d °", HueDeg());
+        Gdiplus::RectF huePill(x + w - 20 * s - 72 * s, ry - 2 * s, 72 * s, 26 * s);
+        DrawValuePill(g, huePill, hueText, pal, light);
+        Gdiplus::RectF hue(x + 232 * s, ry + 5 * s,
+            (huePill.X - 14 * s) - (x + 232 * s), 14 * s);
+        DrawHueStrip(g, hue, (float)HueDeg(), pal);
+        g_hueTrack = RECT{ (LONG)hue.X, (LONG)hue.Y, (LONG)hue.GetRight(), (LONG)hue.GetBottom() };
+        HitAdd((int)hue.X - 4, (int)ry - 6, (int)hue.Width + 8, (int)32 * s, ACT_HUE_STRIP);
+    }
+    ry += 44 * s;
 
-    wchar_t hueText[64];
-    WPrintf(hueText, 64, L"Hue %d · %s", HueDeg(),
-        g_cfg.hueFollow ? L"取自壁纸" : L"手动");
-    SText(g, hueText, 13.5f, FW_NORMAL, sub, light, x + 20 * s, hueY + 30 * s,
-        w - 120 * s, 18 * s);
-
-    // --- 面板 ---
-    float y3 = cardC2.GetBottom() + 14 * s;
-    Gdiplus::RectF cardC3(x, y3, w, 150 * s);
-    FillRound(g, cardC3, 14 * s, pal.card);
-    float cy3 = y3 + pad;
-    SText(g, L"面板", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy3, w - 40 * s, 24 * s);
-    cy3 += 32 * s;
-
-    struct { const wchar_t* name; int value; int act; int minV; int maxV; const wchar_t* unit; } rows[2] = {
-        { L"卡片不透明度", g_cfg.opacity, ACT_OPACITY, 40, 100, L"%" },
-        { L"圆角", g_cfg.radius, ACT_RADIUS, 0, 24, L"px" },
+    // 卡片不透明度 + 圆角
+    struct { const wchar_t* name; int icon; int value; int act; int minV; int maxV; const wchar_t* unit; } rows[2] = {
+        { L"卡片不透明度", 3, g_cfg.opacity, ACT_OPACITY, 40, 100, L"%" },
+        { L"圆角", 2, g_cfg.radius, ACT_RADIUS, 0, 24, L"px" },
     };
     for (int i = 0; i < 2; i++) {
-        float ry = cy3 + i * 38 * s;
-        SText(g, rows[i].name, 15, FW_NORMAL, pal.title, light, x + 20 * s, ry,
-            150 * s, 24 * s);
-        Gdiplus::RectF track(x + 20 * s + 150 * s, ry + 8 * s,
-            w - 40 * s - 150 * s - 64 * s, 9 * s);
+        DrawRowIcon(g, rows[i].icon, x + 20 * s + 15 * s, ry + 15 * s, 15 * s, pal);
+        SText(g, rows[i].name, 15, FW_NORMAL, pal.title, light, x + 62 * s, ry,
+            160 * s, 30 * s);
+        wchar_t val[32];
+        WPrintf(val, 32, L"%d %s", rows[i].value, rows[i].unit);
+        Gdiplus::RectF pill(x + w - 20 * s - 76 * s, ry + 1 * s, 76 * s, 26 * s);
+        DrawValuePill(g, pill, val, pal, light);
+        Gdiplus::RectF track(x + 232 * s, ry + 11 * s,
+            (pill.X - 14 * s) - (x + 232 * s), 8 * s);
         float t = (float)(rows[i].value - rows[i].minV) / (float)(rows[i].maxV - rows[i].minV);
         DrawSlider(g, track, t, pal, light);
-        wchar_t val[32];
-        WPrintf(val, 32, L"%d%s", rows[i].value, rows[i].unit);
-        SText(g, val, 14, FW_NORMAL, sub, light, track.GetRight() + 8 * s, ry,
-            56 * s, 24 * s, DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         RECT* target = (rows[i].act == ACT_OPACITY) ? &g_opTrack : &g_radTrack;
         *target = RECT{ (LONG)track.X, (LONG)track.Y, (LONG)track.GetRight(), (LONG)track.GetBottom() };
-        HitAdd((int)track.X - 6, (int)ry, (int)track.Width + 12, (int)(26 * s), rows[i].act);
+        HitAdd((int)track.X - 6, (int)ry, (int)track.Width + 12, (int)(30 * s), rows[i].act);
+        ry += 44 * s;
+    }
+
+    // --- 显示位置 ---
+    float y5 = cardC2.GetBottom() + 12 * s;
+    Gdiplus::RectF cardC5(x, y5, w, pad * 2 + 30 * s + 32 * s);
+    FillRound(g, cardC5, 14 * s, pal.card);
+    float cy5 = y5 + pad;
+    DrawRowIcon(g, 4, x + 20 * s + 15 * s, cy5 + 15 * s, 15 * s, pal);
+    SText(g, L"显示位置", 15, FW_NORMAL, pal.title, light, x + 62 * s, cy5,
+        160 * s, 30 * s);
+    const wchar_t* posLabels[5] = { L"上移", L"下移", L"左移", L"右移", L"默认位置" };
+    {
+        float bx = x + 20 * s;
+        float byy = cy5 + 34 * s;
+        float bh = 32 * s;
+        float widths[5] = { 72 * s, 72 * s, 72 * s, 72 * s, 100 * s };
+        for (int i = 0; i < 5; i++) {
+            Gdiplus::RectF b(bx, byy, widths[i], bh);
+            DrawTextButton(g, b, posLabels[i], pal, light, g_setHot == ACT_POS + i, ACT_POS + i);
+            bx += widths[i] + 12 * s;
+        }
     }
 }
 
@@ -3604,7 +3974,7 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
 static void SettingsDraw(Gdiplus::Graphics& g)
 {
     double s = SettingsScale();
-    Palette pal = MakePalette(g_lightText, 255);
+    Palette pal = MakePalette(EffectiveDark(), 255);
     const bool light = pal.darkCard;   // light text == dark page
 
     // Full-bleed square background: the window corners are DWM's (see
@@ -3636,19 +4006,26 @@ static void SettingsDraw(Gdiplus::Graphics& g)
         HitAdd((int)close.X, (int)close.Y, (int)close.Width, (int)close.Height, ACT_CLOSE);
     }
 
-    // ---- sidebar ----
+    // ---- sidebar: icon tiles (PanDa-style rail) ----
     float navX = 20 * (float)s;
-    float navY = 76 * (float)s;
+    float navY = 84 * (float)s;
     const wchar_t* navNames[3] = { L"外观", L"显示内容", L"关于" };
     for (int i = 0; i < 3; i++) {
-        Gdiplus::RectF item(navX, navY + i * 54 * s, 200 * s, 46 * s);
+        float tileY = navY + i * 86 * s;
         bool on = (g_setPage == i);
-        if (on) FillRound(g, item, 12 * s, pal.itemBg);
-        Gdiplus::Color fg = on ? pal.itemFg : pal.detail;
-        DrawNavIcon(g, i == 2 ? 2 : i, item.X + 14 * s, item.Y + 13 * s, 18 * s, fg);
-        SText(g, navNames[i], 15, FW_NORMAL, fg, light,
-            item.X + 46 * s, item.Y, item.Width - 56 * s, item.Height);
-        HitAdd((int)item.X, (int)item.Y, (int)item.Width, (int)item.Height, ACT_NAV + i);
+        Gdiplus::RectF tile(navX, tileY, 200 * s, 78 * s);
+        if (on) FillRound(g, tile, 14 * s, pal.itemBg);
+        // icon chip: rounded square, accent-tinted when selected
+        Gdiplus::RectF chip(navX + 20 * s, tileY + 10 * s, 44 * s, 44 * s);
+        Gdiplus::Color chipFill = on
+            ? Gdiplus::Color(255, pal.primary.GetR(), pal.primary.GetG(), pal.primary.GetB())
+            : pal.chipBg;
+        FillRound(g, chip, 12 * s, chipFill);
+        Gdiplus::Color fg = on ? Gdiplus::Color(255, 255, 255, 255) : pal.chipFg;
+        DrawNavIcon(g, i == 2 ? 2 : i, chip.X + 11 * s, chip.Y + 11 * s, 22 * s, fg);
+        SText(g, navNames[i], 14, FW_NORMAL, on ? pal.itemFg : pal.detail, light,
+            navX + 76 * s, tileY, 116 * s, 78 * s);
+        HitAdd((int)tile.X, (int)tile.Y, (int)tile.Width, (int)tile.Height, ACT_NAV + i);
     }
 
     wchar_t foot[64];
@@ -3770,7 +4147,7 @@ static void PerformAction(int act)
 {
     if (act >= ACT_NAV && act < ACT_NAV + 3) {
         g_setPage = act - ACT_NAV;
-    } else if (act >= ACT_THEME && act < ACT_THEME + 4) {
+    } else if (act >= ACT_THEME && act < ACT_THEME + 3) {
         int t = act - ACT_THEME;
         if (t != g_cfg.theme) { g_cfg.theme = t; PanelReload(false); }
     } else if (act >= ACT_TOGGLE && act < ACT_TOGGLE + TOGGLE_COUNT) {
@@ -3778,6 +4155,31 @@ static void PerformAction(int act)
         PanelReload(true);
     } else if (act == ACT_HUE_FOLLOW) {
         g_cfg.hueFollow = !g_cfg.hueFollow;
+        PanelReload(false);
+    } else if (act >= ACT_LIGHT && act < ACT_LIGHT + 3) {
+        g_cfg.lightMode = act - ACT_LIGHT;
+        PanelReload(false);
+    } else if (act >= ACT_SWATCH && act < ACT_SWATCH + 6) {
+        int idx = act - ACT_SWATCH;
+        if (idx == 0) {
+            g_cfg.hueFollow = 1;
+        } else {
+            static const int kPreset[5] = { 250, 190, 160, 300, 20 };
+            g_cfg.hueFollow = 0;
+            g_cfg.hue = kPreset[idx - 1];
+        }
+        PanelReload(false);
+    } else if (act >= ACT_POS && act < ACT_POS + 5) {
+        int step = 8;
+        switch (act - ACT_POS) {
+        case 0: g_cfg.posDy -= step; break;
+        case 1: g_cfg.posDy += step; break;
+        case 2: g_cfg.posDx -= step; break;
+        case 3: g_cfg.posDx += step; break;
+        default: g_cfg.posDx = g_cfg.posDy = 0; break;
+        }
+        g_cfg.posDx = ClampInt(g_cfg.posDx, -400, 400);
+        g_cfg.posDy = ClampInt(g_cfg.posDy, -400, 400);
         PanelReload(false);
     } else if (act == ACT_CLOSE) {
         PostMessageW(g_setHwnd, WM_CLOSE, 0, 0);
@@ -3864,8 +4266,18 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         // Borderless: the client area is the whole window.  With WS_THICKFRAME
         // this also kills the invisible resize frame (our WM_NCHITTEST below
         // never returns a resize code either), keeping the size fixed.
-        if (wParam == TRUE) return 0;
-        break;
+        return 0;
+
+    case WM_NCACTIVATE:
+        // DefWindowProc repaints the WS_THICKFRAME non-client border whenever
+        // the activation state changes - that is the gray frame that popped up
+        // around the window on every window switch.  The documented custom-frame
+        // trick: pass -1 as lParam so the activation bookkeeping still happens
+        // but the frame paint is skipped.
+        return DefWindowProcW(hwnd, msg, wParam, (LPARAM)-1);
+
+    case WM_NCPAINT:
+        return 0;
 
     case WM_NCHITTEST: {
         // Interactive controls get the client; everything else is the drag
@@ -4118,7 +4530,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_CREATE:
         SetTimer(hwnd, 1, 60000, NULL);
         SetTimer(hwnd, 2, 800, NULL);
-        SetTimer(hwnd, 4, 33, NULL);   // hover fade: cursor poll + animation
+        SetTimer(hwnd, 4, 16, NULL);   // hover fade: cursor poll + animation
         return 0;
 
     case WM_TIMER:
@@ -4163,15 +4575,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
                 GetWindowRect(g_hwnd, &rc);
                 bool inside = PtInRect(&rc, pt) != FALSE;
                 int want = inside ? 0 : 255;
-                if (want != g_hoverTarget) g_hoverTarget = want;
+                if (want != g_hoverTarget) {
+                    g_hoverTarget = want;
+                    g_fadeStartTick = GetTickCount64();
+                    g_fadeStartAlpha = g_hoverAlpha;
+                }
                 if (g_hoverAlpha != g_hoverTarget) {
-                    int step = 34;   // ~250 ms full fade at 33 ms/tick
-                    if (g_hoverAlpha < g_hoverTarget) {
-                        g_hoverAlpha += step;
-                        if (g_hoverAlpha > g_hoverTarget) g_hoverAlpha = g_hoverTarget;
+                    ULONGLONG el = GetTickCount64() - g_fadeStartTick;
+                    if (el >= kFadeMs) {
+                        g_hoverAlpha = g_hoverTarget;
                     } else {
-                        g_hoverAlpha -= step;
-                        if (g_hoverAlpha < g_hoverTarget) g_hoverAlpha = g_hoverTarget;
+                        double t = (double)el / (double)kFadeMs;
+                        g_hoverAlpha = (int)(g_fadeStartAlpha
+                            + (g_hoverTarget - g_fadeStartAlpha) * t + 0.5);
                     }
                     PushHoverAlpha();
                 }
