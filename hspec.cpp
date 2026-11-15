@@ -1766,6 +1766,9 @@ static void BuildModel(void)
 static ULONG_PTR g_gdiToken = 0;
 static HWND g_hwnd = NULL;
 static UINT g_dpi = 96;
+// Effective dp->px scale for the panel: the monitor DPI ratio, possibly
+// reduced by ComputeLayout so the panel always fits its monitor.
+static double g_scale = 1.0;
 static int g_winW = 420;
 static int g_winH = 320;
 static bool g_fontReady = false;
@@ -1856,8 +1859,8 @@ static ULONGLONG WallpaperStamp(void)
 
 // Screen position of the panel. PositionWindow, UpdateTheme and the card
 // backdrop all need the same numbers, so keep them here.
-static int PanelMarginX(void) { return (int)(18.0 * (double)g_dpi / 96.0 + 0.5); }
-static int PanelMarginY(void) { return (int)(22.0 * (double)g_dpi / 96.0 + 0.5); }
+static int PanelMarginX(void) { return (int)(18.0 * g_scale + 0.5); }
+static int PanelMarginY(void) { return (int)(22.0 * g_scale + 0.5); }
 
 static void RefreshWallpaperCache(void);
 
@@ -1997,25 +2000,57 @@ static bool CardBlur(void) { return g_cfg.theme == THEME_ETHEREAL; }
 static void ComputeLayout(void)
 {
     double s = (double)g_dpi / 96.0;
-    g_iconSize = (int)(24.0 * s + 0.5);
-    g_gapX = (int)(10.0 * s + 0.5);
-    g_titleH = (int)(26.0 * s + 0.5);
-    g_detailH = (int)(22.0 * s + 0.5);
-    g_rowGap = (int)(9.0 * s + 0.5);
-    g_padTop = (int)(4.0 * s + 0.5);
-    g_cardMargin = (int)(8.0 * s + 0.5);
-    g_padX = (int)(14.0 * s + 0.5);
-    g_padY = (int)(15.0 * s + 0.5);
-    g_chipSize = (int)(30.0 * s + 0.5);
-    // A card spends padding on both sides, so the window widens just enough to
-    // keep the text column identical to the plain theme (no new truncation).
-    g_winW = (int)((CardMode() ? 526.0 : 480.0) * s + 0.5);
 
-    int h = CardMode() ? (g_cardMargin * 2 + g_padY * 2) : g_padTop;
-    for (int i = 0; i < g_rowCount; i++)
-        h += g_titleH + g_rows[i].detailCount * g_detailH + g_rowGap;
-    if (!CardMode()) h += (int)(4.0 * s + 0.5);
-    g_winH = h;
+    // Two passes at most: lay out at the monitor's DPI scale, then shrink
+    // proportionally if the result would not fit the monitor.  Everything is
+    // derived from s, so the panel scales as one piece.
+    for (int pass = 0; pass < 2; pass++) {
+        g_iconSize = (int)(24.0 * s + 0.5);
+        g_gapX = (int)(10.0 * s + 0.5);
+        g_titleH = (int)(26.0 * s + 0.5);
+        g_detailH = (int)(22.0 * s + 0.5);
+        g_rowGap = (int)(9.0 * s + 0.5);
+        g_padTop = (int)(4.0 * s + 0.5);
+        g_cardMargin = (int)(8.0 * s + 0.5);
+        g_padX = (int)(14.0 * s + 0.5);
+        g_padY = (int)(15.0 * s + 0.5);
+        g_chipSize = (int)(30.0 * s + 0.5);
+        // A card spends padding on both sides, so the window widens just
+        // enough to keep the text column identical to the plain theme (no
+        // new truncation).
+        g_winW = (int)((CardMode() ? 526.0 : 480.0) * s + 0.5);
+
+        int h = CardMode() ? (g_cardMargin * 2 + g_padY * 2) : g_padTop;
+        for (int i = 0; i < g_rowCount; i++)
+            h += g_titleH + g_rows[i].detailCount * g_detailH + g_rowGap;
+        if (!CardMode()) h += (int)(4.0 * s + 0.5);
+        g_winH = h;
+
+        if (pass == 0) {
+            POINT origin = { 0, 0 };
+            HMONITOR mon = MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY);
+            MONITORINFO mi;
+            memset(&mi, 0, sizeof(mi));
+            mi.cbSize = sizeof(mi);
+            if (GetMonitorInfoW(mon, &mi)) {
+                double availW = (double)(mi.rcWork.right - mi.rcWork.left)
+                    - 2.0 * 18.0 * s;
+                double availH = (double)(mi.rcWork.bottom - mi.rcWork.top)
+                    - 2.0 * 22.0 * s;
+                double f = 1.0;
+                if (availW > 1.0 && g_winW > availW) f = availW / (double)g_winW;
+                if (availH > 1.0 && (double)g_winH * f > availH)
+                    f = availH / (double)g_winH;
+                if (f < 0.999) {
+                    s *= f;
+                    continue;   // relayout at the reduced scale
+                }
+            }
+        }
+        break;
+    }
+    if (s < 0.5) s = 0.5;
+    g_scale = s;
 }
 
 static void AddRoundRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rc, float r)
@@ -2373,7 +2408,7 @@ static void DrawTextGdiLine(Gdiplus::Graphics& g, const wchar_t* text, int px,
     double dpiScale = -1.0)
 {
     if (!text || !text[0] || w <= 0 || h <= 0) return;
-    if (dpiScale <= 0.0) dpiScale = (double)g_dpi / 96.0;
+    if (dpiScale <= 0.0) dpiScale = g_scale;
 
     BITMAPINFO bi;
     memset(&bi, 0, sizeof(bi));
@@ -2522,7 +2557,7 @@ static void DumpPanelIfRequested(const void* bits)
 static bool RenderInternal(void)
 {
     if (!g_hwnd || g_winW <= 0 || g_winH <= 0) return false;
-    double s = (double)g_dpi / 96.0;
+    double s = g_scale;
 
     Gdiplus::Bitmap bmp(g_winW, g_winH, PixelFormat32bppPARGB);
     if (bmp.GetLastStatus() != Gdiplus::Ok) return false;
@@ -2815,8 +2850,11 @@ static const wchar_t* kSettingsClass = L"HSpecSettings";
 static HWND g_setHwnd = NULL;
 static int g_setW = 0, g_setH = 0;
 static UINT g_setDpi = 96;
+// Effective dp->px scale for the settings window: the monitor DPI ratio,
+// possibly reduced so the window always fits the work area.
+static double g_setScale = 1.0;
 
-static double SettingsScale(void) { return (double)g_setDpi / 96.0; }
+static double SettingsScale(void) { return g_setScale; }
 
 // DPI of the monitor the window will live on. Reading the panel's own DPI is
 // not enough: right after startup the panel window may still be on its initial
@@ -2836,6 +2874,31 @@ static UINT MonitorDpi(HMONITOR mon)
         if (SUCCEEDED(fn(mon, 0 /* MDT_EFFECTIVE_DPI */, &dx, &dy)) && dx > 0) return dx;
     }
     return 0;
+}
+
+// Size the settings window for a monitor: 1024x720 dp at that monitor's DPI,
+// shrunk proportionally if the result would not fit its work area.  Drawing
+// uses the same effective scale (SettingsScale), so window and content scale
+// as one piece.
+static void SettingsLayoutFor(HMONITOR mon, UINT dpi)
+{
+    if (!dpi) dpi = MonitorDpi(mon);
+    if (!dpi) dpi = 96;
+    g_setDpi = dpi;
+    double s = (double)dpi / 96.0;
+    MONITORINFO mi;
+    memset(&mi, 0, sizeof(mi));
+    mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(mon, &mi)) {
+        double availW = (double)(mi.rcWork.right - mi.rcWork.left) - 24.0;
+        double availH = (double)(mi.rcWork.bottom - mi.rcWork.top) - 24.0;
+        if (availW > 1.0 && 1024.0 * s > availW) s = availW / 1024.0;
+        if (availH > 1.0 && 720.0 * s > availH) s = availH / 720.0;
+    }
+    if (s < 0.5) s = 0.5;
+    g_setScale = s;
+    g_setW = (int)(1024.0 * s + 0.5);
+    g_setH = (int)(720.0 * s + 0.5);
 }
 static int g_setPage = 0;       // 0 look, 1 content, 2 about
 static int g_setHot = 0;
@@ -3621,14 +3684,32 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     }
 
     case WM_DPICHANGED: {
-        g_setDpi = (UINT)HIWORD(wParam);
-        if (g_setDpi == 0) g_setDpi = (UINT)LOWORD(wParam);
-        double ds = SettingsScale();
-        g_setW = (int)(1024.0 * ds + 0.5);
-        g_setH = (int)(720.0 * ds + 0.5);
         RECT* target = (RECT*)lParam;
+        UINT ndpi = (UINT)HIWORD(wParam);
+        if (ndpi == 0) ndpi = (UINT)LOWORD(wParam);
+        HMONITOR mon = MonitorFromRect(target, MONITOR_DEFAULTTONEAREST);
+        SettingsLayoutFor(mon, ndpi);
         SetWindowPos(hwnd, NULL, target->left, target->top, g_setW, g_setH,
             SWP_NOZORDER | SWP_NOACTIVATE);
+        SettingsInvalidate();
+        return 0;
+    }
+
+    case WM_DISPLAYCHANGE: {
+        // Resolution changed - refit so the window never outgrows the screen.
+        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        SettingsLayoutFor(mon, 0);
+        SetWindowPos(hwnd, NULL, 0, 0, g_setW, g_setH,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        SettingsInvalidate();
+        return 0;
+    }
+
+    case WM_SETTINGCHANGE: {
+        HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        SettingsLayoutFor(mon, 0);
+        SetWindowPos(hwnd, NULL, 0, 0, g_setW, g_setH,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         SettingsInvalidate();
         return 0;
     }
@@ -3781,11 +3862,8 @@ static void OpenSettings(void)
 
     POINT origin0 = { 0, 0 };
     HMONITOR mon = MonitorFromPoint(origin0, MONITOR_DEFAULTTOPRIMARY);
-    UINT mdpi = MonitorDpi(mon);
-    g_setDpi = mdpi ? mdpi : GetDpiSafe(g_hwnd);
+    SettingsLayoutFor(mon, 0);
     double s = SettingsScale();
-    g_setW = (int)(1024.0 * s + 0.5);
-    g_setH = (int)(720.0 * s + 0.5);
 
     WNDCLASSEXW wc;
     memset(&wc, 0, sizeof(wc));
@@ -3931,6 +4009,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     case WM_SETTINGCHANGE:
+        // Work area may have changed (taskbar moved/resized) - refit.
+        ComputeLayout();
+        PositionWindow();
         g_wallpaperStamp = WallpaperStamp();
         UpdateTheme();
         Render();
@@ -3943,12 +4024,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         Render();
         return 0;
 
-    case WM_DPICHANGED:
-        g_dpi = GetDpiSafe(hwnd);
+    case WM_DPICHANGED: {
+        UINT ndpi = (UINT)HIWORD(wParam);
+        if (ndpi == 0) ndpi = (UINT)LOWORD(wParam);
+        g_dpi = ndpi ? ndpi : GetDpiSafe(hwnd);
         ComputeLayout();
         PositionWindow();
         Render();
         return 0;
+    }
 
     case WM_DPICHANGED_AFTERPARENT:
         g_dpi = GetDpiSafe(hwnd);
@@ -4075,11 +4159,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
 
     if (g_settingsDumpPath[0] && !g_dumpPath[0]) {
         POINT origin0 = { 0, 0 };
-        UINT mdpi = MonitorDpi(MonitorFromPoint(origin0, MONITOR_DEFAULTTOPRIMARY));
-        g_setDpi = mdpi ? mdpi : GetDpiSafe(g_hwnd);
-        double ds = SettingsScale();
-        g_setW = (int)(1024.0 * ds + 0.5);
-        g_setH = (int)(720.0 * ds + 0.5);
+        SettingsLayoutFor(
+            MonitorFromPoint(origin0, MONITOR_DEFAULTTOPRIMARY), 0);
         g_setPage = g_settingsDumpPage;
         LoadLogoBitmaps();
         SettingsSavePng(g_settingsDumpPath);
