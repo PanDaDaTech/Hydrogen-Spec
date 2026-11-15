@@ -911,6 +911,8 @@ static const wchar_t* GpuVendorFallback(const wchar_t* key)
     return L"显卡";
 }
 
+struct GpuInfo { wchar_t name[192]; wchar_t key[9]; int rank; };
+
 static int GpuRank(const wchar_t* name)
 {
     static const wchar_t* discrete[] = {
@@ -921,7 +923,37 @@ static int GpuRank(const wchar_t* name)
     return 1;
 }
 
-struct GpuInfo { wchar_t name[192]; wchar_t key[9]; int rank; };
+// WinPE marker: HKLM\SYSTEM\CurrentControlSet\Control\MiniNT exists.
+static bool IsWinPE(void)
+{
+    HKEY k;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\CurrentControlSet\Control\MiniNT",
+            0, KEY_READ, &k) == ERROR_SUCCESS) {
+        RegCloseKey(k);
+        return true;
+    }
+    return false;
+}
+
+// Index of the GPU driving the desktop (its display output is attached),
+// matched back through the PCI vendor/device key.  Returns -1 when there is
+// no desktop to ask (WinPE, headless) - the caller then prefers the discrete
+// adapter.
+static int GpuActiveIndex(const GpuInfo* gpus, int gc)
+{
+    if (IsWinPE()) return -1;
+    DISPLAY_DEVICEW dd;
+    memset(&dd, 0, sizeof(dd));
+    dd.cb = sizeof(dd);
+    for (int i = 0; EnumDisplayDevicesW(NULL, i, &dd, 0); i++) {
+        if (!(dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP)) continue;
+        wchar_t key[9] = { 0 };
+        if (!ExtractPciKey(dd.DeviceID, key)) continue;
+        for (int j = 0; j < gc; j++)
+            if (wcscmp(gpus[j].key, key) == 0) return j;
+    }
+    return -1;
+}
 
 static int EnumGpus(GpuInfo* out, int cap)
 {
@@ -1540,22 +1572,25 @@ static void BuildModel(void)
     }
 
     // ---- Board / firmware ----
+    // Title carries vendor + product ("主板: 联想 LNVNB161216"); boot mode and
+    // the Secure Boot cert share one detail line so the section stays compact.
     g_skipSection = !g_cfg.showBoard;
-    wchar_t boardTitle[256] = L"主板";
+    wchar_t boardMfr[128] = { 0 };
+    if (g_smbios.boardManufacturer[0]) {
+        wcsncpy_s(boardMfr, 128, g_smbios.boardManufacturer, _TRUNCATE);
+        TranslateVendorText(boardMfr, 128);
+    }
     const wchar_t* boardProduct = g_smbios.boardProduct[0] ? g_smbios.boardProduct
         : (g_smbios.sysProduct[0] ? g_smbios.sysProduct : L"");
-    if (boardProduct[0])
+    wchar_t boardTitle[256] = L"主板";
+    if (boardMfr[0] && boardProduct[0])
+        WPrintf(boardTitle, 256, L"主板: %s %s", boardMfr, boardProduct);
+    else if (boardProduct[0])
         WPrintf(boardTitle, 256, L"主板: %s", boardProduct);
+    else if (boardMfr[0])
+        WPrintf(boardTitle, 256, L"主板: %s", boardMfr);
     r = ModelAddRow(ICON_BOARD, boardTitle);
 
-    if (g_smbios.boardManufacturer[0]) {
-        wchar_t mfr[128];
-        wcsncpy_s(mfr, 128, g_smbios.boardManufacturer, _TRUNCATE);
-        TranslateVendorText(mfr, 128);
-        wchar_t d[256];
-        WPrintf(d, 256, L"厂商: %s", mfr);
-        ModelAddDetail(r, d);
-    }
     if (g_smbios.biosVersion[0]) {
         wchar_t d[256];
         WPrintf(d, 256, L"固件: %s", g_smbios.biosVersion);
@@ -1575,18 +1610,14 @@ static void BuildModel(void)
         wcscpy_s(boot, 128, L"未知");
     }
     {
-        wchar_t d[192];
-        WPrintf(d, 192, L"启动: %s", boot);
-        ModelAddDetail(r, d);
-    }
-
-    if (fw == 2 && sb == 1) {
         wchar_t cert[64] = { 0 };
-        if (CollectBootCert(cert, 64)) {
-            wchar_t d[128];
-            WPrintf(d, 128, L"证书: %s", cert);
-            ModelAddDetail(r, d);
-        }
+        bool haveCert = (fw == 2 && sb == 1) && CollectBootCert(cert, 64);
+        wchar_t d[256];
+        if (haveCert)
+            WPrintf(d, 256, L"启动: %s    证书: %s", boot, cert);
+        else
+            WPrintf(d, 256, L"启动: %s", boot);
+        ModelAddDetail(r, d);
     }
 
     // ---- Memory ----
@@ -1681,13 +1712,33 @@ static void BuildModel(void)
     }
 
     // ---- GPU ----
+    // One section per machine, not per adapter: the title is the GPU that is
+    // actually driving the desktop (in WinPE there is no desktop, so the
+    // discrete adapter wins).  Any second GPU folds into a detail line.
     g_skipSection = !g_cfg.showGpu;
     GpuInfo gpus[4];
     int gc = EnumGpus(gpus, 4);
-    for (int i = 0; i < gc; i++) {
+    if (gc > 0) {
+        int act = GpuActiveIndex(gpus, gc);
+        if (act < 0) {
+            act = 0;   // discrete-first: EnumGpus sorted by GpuRank
+            for (int i = 0; i < gc; i++)
+                if (gpus[i].rank == 0) { act = i; break; }
+        }
         wchar_t title[256];
-        WPrintf(title, 256, L"显卡: %s", gpus[i].name);
-        ModelAddRow(ICON_GPU, title);
+        WPrintf(title, 256, L"显卡: %s", gpus[act].name);
+        r = ModelAddRow(ICON_GPU, title);
+        if (gc > 1) {
+            wchar_t rest[512] = { 0 };
+            for (int i = 0; i < gc; i++) {
+                if (i == act) continue;
+                if (rest[0]) wcscat_s(rest, 512, L" / ");
+                wcscat_s(rest, 512, gpus[i].name);
+            }
+            wchar_t d[576];
+            WPrintf(d, 576, L"另一块: %s", rest);
+            ModelAddDetail(r, d);
+        }
     }
 
     // ---- Disks ----
@@ -3250,7 +3301,7 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     Gdiplus::Color sub = pal.detail;
 
     // --- 主题 ---
-    const wchar_t* names[3] = { L"纯文字", L"轻卡片", L"Ethereal" };
+    const wchar_t* names[3] = { L"纯文字", L"轻卡片", L"卡片" };
     float gap = 16 * s;
     float tileW = (w - 40 * s - 2 * gap) / 3.0f;
     float thumbH = tileW * 84.0f / 161.0f;
