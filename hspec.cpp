@@ -1290,7 +1290,8 @@ static int EnumNics(NicInfo* out, int cap)
 // Configuration and palette
 // ===========================================================================
 
-enum { THEME_PLAIN = 0, THEME_CARD = 1, THEME_ETHEREAL = 2 };
+enum { THEME_PLAIN = 0, THEME_CARD = 1, THEME_ETHEREAL = 2, THEME_SPLIT = 3 };
+enum { THEME_COUNT = 4 };
 
 struct Config
 {
@@ -1369,7 +1370,7 @@ static void LoadConfig(void)
 {
     ResolveIniPath();
     if (!g_iniPath[0]) return;
-    g_cfg.theme = ClampInt((int)GetPrivateProfileIntW(L"panel", L"theme", g_cfg.theme, g_iniPath), 0, 2);
+    g_cfg.theme = ClampInt((int)GetPrivateProfileIntW(L"panel", L"theme", g_cfg.theme, g_iniPath), 0, THEME_COUNT - 1);
     g_cfg.hueFollow = ClampInt((int)GetPrivateProfileIntW(L"panel", L"hueFollow", g_cfg.hueFollow, g_iniPath), 0, 1);
     g_cfg.hue = ClampInt((int)GetPrivateProfileIntW(L"panel", L"hue", g_cfg.hue, g_iniPath), 0, 360);
     g_cfg.opacity = ClampInt((int)GetPrivateProfileIntW(L"panel", L"opacity", g_cfg.opacity, g_iniPath), 40, 100);
@@ -2094,10 +2095,21 @@ static void ComputeLayout(void)
         // new truncation).
         g_winW = (int)((CardMode() ? 526.0 : 480.0) * s + 0.5);
 
-        int h = CardMode() ? (g_cardMargin * 2 + g_padY * 2) : g_padTop;
-        for (int i = 0; i < g_rowCount; i++)
-            h += g_titleH + g_rows[i].detailCount * g_detailH + g_rowGap;
-        if (!CardMode()) h += (int)(4.0 * s + 0.5);
+        int h;
+        if (g_cfg.theme == THEME_SPLIT) {
+            // One card per section: each row carries its own padY top+bottom,
+            // cards are separated by rowGap inside a cardMargin frame.
+            h = g_cardMargin * 2;
+            for (int i = 0; i < g_rowCount; i++) {
+                h += g_padY * 2 + g_titleH + g_rows[i].detailCount * g_detailH;
+                if (i + 1 < g_rowCount) h += g_rowGap;
+            }
+        } else {
+            h = CardMode() ? (g_cardMargin * 2 + g_padY * 2) : g_padTop;
+            for (int i = 0; i < g_rowCount; i++)
+                h += g_titleH + g_rows[i].detailCount * g_detailH + g_rowGap;
+            if (!CardMode()) h += (int)(4.0 * s + 0.5);
+        }
         g_winH = h;
 
         if (pass == 0) {
@@ -2672,7 +2684,8 @@ static bool RenderInternal(void)
     float radius = (float)g_cfg.radius * (float)s;
     if (radius > cardRect.Height * 0.5f) radius = cardRect.Height * 0.5f;
 
-    if (card) {
+    const bool split = (g_cfg.theme == THEME_SPLIT);
+    if (card && !split) {
         DrawPanelShadow(g, cardRect, radius);
         DrawPanelCard(g, cardRect, radius, pal);
     }
@@ -2688,6 +2701,7 @@ static bool RenderInternal(void)
     if (detailPx < 9) detailPx = 9;
 
     float y = card ? (float)(g_cardMargin + g_padY) : (float)g_padTop;
+    if (split) y = (float)g_cardMargin + (float)g_padY;
     float textX = card
         ? (float)(g_cardMargin + g_padX + g_chipSize + g_gapX)
         : (float)(g_iconSize + g_gapX);
@@ -2695,6 +2709,16 @@ static bool RenderInternal(void)
 
     for (int i = 0; i < g_rowCount; i++) {
         UiRow& row = g_rows[i];
+        if (split) {
+            // Separated card for this section only.
+            float rowH = (float)(g_padY * 2 + g_titleH + row.detailCount * g_detailH);
+            Gdiplus::RectF rowCard((float)g_cardMargin, y - (float)g_padY,
+                (float)(g_winW - g_cardMargin * 2), rowH);
+            float rowRadius = radius;
+            if (rowRadius > rowCard.Height * 0.5f) rowRadius = rowCard.Height * 0.5f;
+            DrawPanelShadow(g, rowCard, rowRadius);
+            DrawPanelCard(g, rowCard, rowRadius, pal);
+        }
         if (card) {
             // Tinted chip behind the glyph, like the theme's btn-regular-bg.
             Gdiplus::RectF chip(cardRect.X + g_padX,
@@ -2721,7 +2745,15 @@ static bool RenderInternal(void)
                 lightText, (int)textX, (int)y, (int)textW, g_detailH);
             y += (float)g_detailH;
         }
-        y += (float)g_rowGap;
+        if (split) {
+            // next card's text starts 2*padY below this card's text end
+            // (this card's bottom pad + the next card's top pad), plus the
+            // inter-card gap.
+            y += (float)g_padY * 2.0f;
+            if (i + 1 < g_rowCount) y += (float)g_rowGap;
+        } else {
+            y += (float)g_rowGap;
+        }
     }
 
     // Bitmap::GetHBITMAP() drops the alpha channel for PARGB bitmaps, so copy
@@ -3262,6 +3294,28 @@ static void DrawThemeThumb(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int k
         return;
     }
 
+    if (kind == 3) {
+        // Split cards: three separate rounded sheets stacked on the wallpaper.
+        float cardH = (sheet.Height - 6 * s) / 3.0f;
+        for (int i = 0; i < 3; i++) {
+            Gdiplus::RectF one(sheet.X, sheet.Y + i * (cardH + 3 * s),
+                sheet.Width, cardH);
+            Gdiplus::SolidBrush sheetBrush(Gdiplus::Color(196, 255, 255, 255));
+            Gdiplus::GraphicsPath sp;
+            AddRoundRect(sp, one, 5 * s);
+            g.FillPath(&sheetBrush, &sp);
+            float y = one.Y + 3.5f * s;
+            FillRound(g, MRect(one.X + 5 * s, y, 8 * s, 8 * s), 2.5f * s, pal.chipBg);
+            float tx = one.X + 16 * s;
+            FillRound(g, MRect(tx, y + 0.5f * s, 52 * s - i * 5 * s, 3.2f * s), 2 * s, barStrong);
+            FillRound(g, MRect(tx, y + 5.5f * s, 34 * s - i * 4 * s, 2.3f * s), 1.5f * s, barWeak);
+        }
+        g.SetClip(&saved);
+        Gdiplus::Pen edge(Gdiplus::Color(28, 0, 0, 0), 1.0f);
+        g.DrawPath(&edge, &path);
+        return;
+    }
+
     if (kind == 1) {
         Gdiplus::SolidBrush sheetBrush(Gdiplus::Color(255, 255, 255, 255));
         Gdiplus::GraphicsPath sp;
@@ -3331,9 +3385,9 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     Gdiplus::Color sub = pal.detail;
 
     // --- 主题 ---
-    const wchar_t* names[3] = { L"纯文字", L"轻卡片", L"卡片" };
-    float gap = 16 * s;
-    float tileW = (w - 40 * s - 2 * gap) / 3.0f;
+    const wchar_t* names[4] = { L"纯文字", L"轻卡片", L"卡片", L"分离卡片" };
+    float gap = 14 * s;
+    float tileW = (w - 40 * s - 3 * gap) / 4.0f;
     float thumbH = tileW * 84.0f / 161.0f;
     float cardH1 = pad + 26 * s + 30 * s + thumbH + 8 * s + 24 * s + pad;
     Gdiplus::RectF cardC1(x, y, w, cardH1);
@@ -3341,10 +3395,10 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float cy = y + pad;
     SText(g, L"主题", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy, w - 40 * s, 24 * s);
     cy += 26 * s;
-    SText(g, L"同一个信息模型，三种渲染层", 14, FW_NORMAL, sub, light,
+    SText(g, L"同一个信息模型，四种渲染层", 14, FW_NORMAL, sub, light,
         x + 20 * s, cy, w - 40 * s, 20 * s);
     cy += 30 * s;
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         float tx = x + 20 * s + i * (tileW + gap);
         Gdiplus::RectF thumb(tx, cy, tileW, thumbH);
         DrawThemeThumb(g, thumb, i, pal, s);
@@ -3716,7 +3770,7 @@ static void PerformAction(int act)
 {
     if (act >= ACT_NAV && act < ACT_NAV + 3) {
         g_setPage = act - ACT_NAV;
-    } else if (act >= ACT_THEME && act < ACT_THEME + 3) {
+    } else if (act >= ACT_THEME && act < ACT_THEME + 4) {
         int t = act - ACT_THEME;
         if (t != g_cfg.theme) { g_cfg.theme = t; PanelReload(false); }
     } else if (act >= ACT_TOGGLE && act < ACT_TOGGLE + TOGGLE_COUNT) {
@@ -4267,7 +4321,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
                     g_settingsDumpPage = ClampInt(_wtoi(argv[++i]), 0, 2);
                 } else if (wcscmp(argv[i], L"--theme") == 0 && i + 1 < argc) {
                     // applied after LoadConfig(), which would overwrite it
-                    g_themeOverride = ClampInt(_wtoi(argv[++i]), 0, 2);
+                    g_themeOverride = ClampInt(_wtoi(argv[++i]), 0, THEME_COUNT - 1);
                 } else if (wcscmp(argv[i], L"--settings") == 0) {
                     g_openSettingsAtStart = true;
                 }
