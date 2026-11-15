@@ -1865,10 +1865,23 @@ static int PanelMarginY(void) { return (int)(22.0 * g_scale + 0.5); }
 static void RefreshWallpaperCache(void);
 
 // Pick dark or light text from the wallpaper brightness behind the panel.
+// Wallpaper sampling (full decode + 100 GetPixel) is expensive; cache it on
+// (wallpaper stamp, panel geometry).  Slider drags re-render every tick and
+// must never land in here.
+static ULONGLONG g_themeStamp = 0;
+static int g_themeW = 0, g_themeH = 0;
+
 static void UpdateTheme(void)
 {
     wchar_t path[MAX_PATH] = { 0 };
     bool haveImage = false;
+
+    ULONGLONG stamp = WallpaperStamp();
+    if (stamp == g_themeStamp && g_winW == g_themeW && g_winH == g_themeH) {
+        ApplyPalette();
+        RefreshWallpaperCache();
+        return;
+    }
 
     if (GetWallpaperPath(path, MAX_PATH)) {
         Gdiplus::Bitmap img(path);
@@ -1927,6 +1940,10 @@ static void UpdateTheme(void)
             }
         }
     }
+
+    g_themeStamp = stamp;
+    g_themeW = g_winW;
+    g_themeH = g_winH;
 
     if (!haveImage) {
         // Solid-color desktop: HKCU\Control Panel\Colors\Background = "R G B".
@@ -2075,14 +2092,30 @@ static void AddRoundRect(Gdiplus::GraphicsPath& path, const Gdiplus::RectF& rc, 
 static Gdiplus::Bitmap* g_wallCache = NULL;
 static int g_wallCacheW = 0, g_wallCacheH = 0;
 
+static ULONGLONG g_wallStamp = 0;
+
 static void RefreshWallpaperCache(void)
 {
+    if (!CardBlur()) {
+        // A flat card never reads the wallpaper.
+        if (g_wallCache) {
+            delete g_wallCache;
+            g_wallCache = NULL;
+        }
+        g_wallCacheW = g_wallCacheH = 0;
+        return;
+    }
+
+    // Already decoded for this wallpaper? Keep it - decoding twice per
+    // settings click is what made every interaction feel stuck.
+    ULONGLONG stamp = WallpaperStamp();
+    if (g_wallCache && stamp == g_wallStamp) return;
+
     if (g_wallCache) {
         delete g_wallCache;
         g_wallCache = NULL;
     }
     g_wallCacheW = g_wallCacheH = 0;
-    if (!CardBlur()) return;  // a flat card never reads the wallpaper
 
     wchar_t path[MAX_PATH] = { 0 };
     if (!GetWallpaperPath(path, MAX_PATH)) return;
@@ -2112,6 +2145,7 @@ static void RefreshWallpaperCache(void)
     g_wallCache = dst;
     g_wallCacheW = dw;
     g_wallCacheH = dh;
+    g_wallStamp = stamp;
 }
 
 // Cheap soft shadow: expanding low-alpha outlines. A real blur would need a
@@ -2972,6 +3006,19 @@ static void ToggleFlip(int index)
     }
 }
 
+static bool g_cfgDirty = false;
+
+// Fast preview path for slider drags: repaint only.  No disk writes, no
+// EnumWindows, no wallpaper resampling (UpdateTheme is cached anyway) - the
+// drag tick must stay instant.
+static void PanelPreview(void)
+{
+    if (!g_hwnd) return;
+    ComputeLayout();
+    Render();
+    g_cfgDirty = true;
+}
+
 static void PanelReload(bool rebuildModel)
 {
     if (g_hwnd) {
@@ -2983,6 +3030,15 @@ static void PanelReload(bool rebuildModel)
         SendToDesktopLayer();
     }
     SaveConfig();
+    g_cfgDirty = false;
+}
+
+// Persist settings that were only previewed during a drag.
+static void PanelCommit(void)
+{
+    if (!g_cfgDirty) return;
+    SaveConfig();
+    g_cfgDirty = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -3564,14 +3620,14 @@ static void SetSliderFromX(int act, int x)
 
     if (act == ACT_OPACITY) {
         int v = 40 + (int)(t * 60.0f + 0.5f);
-        if (v != g_cfg.opacity) { g_cfg.opacity = v; PanelReload(false); }
+        if (v != g_cfg.opacity) { g_cfg.opacity = v; PanelPreview(); }
     } else if (act == ACT_RADIUS) {
         int v = (int)(t * 24.0f + 0.5f);
-        if (v != g_cfg.radius) { g_cfg.radius = v; PanelReload(false); }
+        if (v != g_cfg.radius) { g_cfg.radius = v; PanelPreview(); }
     } else if (act == ACT_HUE_STRIP) {
         int v = (int)(t * 360.0f + 0.5f);
         g_cfg.hueFollow = 0;
-        if (v != g_cfg.hue) { g_cfg.hue = v; PanelReload(false); }
+        if (v != g_cfg.hue) { g_cfg.hue = v; PanelPreview(); }
     }
 }
 
@@ -3634,6 +3690,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         if (g_setDrag) {
             g_setDrag = 0;
             ReleaseCapture();
+            PanelCommit();
         }
         return 0;
 
@@ -3651,7 +3708,8 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             int step = (wParam == VK_RIGHT) ? 1 : -1;
             g_cfg.hue = (g_cfg.hue + step * 5 + 360) % 360;
             g_cfg.hueFollow = 0;
-            PanelReload(false);
+            PanelPreview();
+            PanelCommit();
             SettingsInvalidate();
             return 0;
         }
