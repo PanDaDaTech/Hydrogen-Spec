@@ -1822,6 +1822,12 @@ static UINT g_dpi = 96;
 static double g_scale = 1.0;
 static int g_winW = 420;
 static int g_winH = 320;
+// ClassIsland-style hover behaviour: pointing at the panel fades it out of
+// the way, moving off fades it back in.  g_hoverAlpha is what is on screen,
+// g_hoverTarget is where the fade is heading; the last pushed DIB is kept so
+// the fade only re-blends instead of re-rendering text.
+static int g_hoverAlpha = 255, g_hoverTarget = 255;
+static HBITMAP g_pushBmp = NULL;
 static bool g_fontReady = false;
 static HANDLE g_fontReg = NULL;
 // GDI+ cannot see fonts registered with AddFontMemResourceEx, so the same
@@ -2761,7 +2767,7 @@ static bool RenderInternal(void)
     BLENDFUNCTION bf;
     bf.BlendOp = AC_SRC_OVER;
     bf.BlendFlags = 0;
-    bf.SourceConstantAlpha = 255;
+    bf.SourceConstantAlpha = (BYTE)g_hoverAlpha;
     bf.AlphaFormat = AC_SRC_ALPHA;
 
     SIZE size;
@@ -2772,9 +2778,33 @@ static bool RenderInternal(void)
 
     SelectObject(mem, old);
     DeleteDC(mem);
-    DeleteObject(hbm);
     ReleaseDC(NULL, screen);
+    // Keep the DIB: the hover fade re-blends it instead of re-rendering.
+    if (g_pushBmp) DeleteObject(g_pushBmp);
+    g_pushBmp = hbm;
     return ok != FALSE;
+}
+
+// Re-push the cached frame at the current hover alpha (fade steps).
+static void PushHoverAlpha(void)
+{
+    if (!g_hwnd || !g_pushBmp) return;
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP old = (HBITMAP)SelectObject(mem, g_pushBmp);
+    BLENDFUNCTION bf;
+    bf.BlendOp = AC_SRC_OVER;
+    bf.BlendFlags = 0;
+    bf.SourceConstantAlpha = (BYTE)g_hoverAlpha;
+    bf.AlphaFormat = AC_SRC_ALPHA;
+    SIZE size;
+    size.cx = g_winW;
+    size.cy = g_winH;
+    POINT src = { 0, 0 };
+    UpdateLayeredWindow(g_hwnd, screen, NULL, &size, mem, &src, 0, &bf, ULW_ALPHA);
+    SelectObject(mem, old);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
 }
 
 static void PositionWindow(void);
@@ -4034,6 +4064,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_CREATE:
         SetTimer(hwnd, 1, 60000, NULL);
         SetTimer(hwnd, 2, 800, NULL);
+        SetTimer(hwnd, 4, 33, NULL);   // hover fade: cursor poll + animation
         return 0;
 
     case WM_TIMER:
@@ -4068,6 +4099,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             PositionWindow();
             Render();
             SendToDesktopLayer();
+        } else if (wParam == 4) {
+            // ClassIsland-style hover: the panel is click-through, so poll the
+            // cursor.  Over the panel -> fade out; off it -> fade back in.
+            if (g_hwnd) {
+                POINT pt;
+                GetCursorPos(&pt);
+                RECT rc;
+                GetWindowRect(g_hwnd, &rc);
+                bool inside = PtInRect(&rc, pt) != FALSE;
+                int want = inside ? 0 : 255;
+                if (want != g_hoverTarget) g_hoverTarget = want;
+                if (g_hoverAlpha != g_hoverTarget) {
+                    int step = 34;   // ~250 ms full fade at 33 ms/tick
+                    if (g_hoverAlpha < g_hoverTarget) {
+                        g_hoverAlpha += step;
+                        if (g_hoverAlpha > g_hoverTarget) g_hoverAlpha = g_hoverTarget;
+                    } else {
+                        g_hoverAlpha -= step;
+                        if (g_hoverAlpha < g_hoverTarget) g_hoverAlpha = g_hoverTarget;
+                    }
+                    PushHoverAlpha();
+                }
+            }
         }
         return 0;
 
@@ -4154,6 +4208,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         KillTimer(hwnd, 1);
         KillTimer(hwnd, 2);
         KillTimer(hwnd, 3);
+        KillTimer(hwnd, 4);
         RemoveTrayIcon();
         g_hwnd = NULL;
         PostQuitMessage(0);
