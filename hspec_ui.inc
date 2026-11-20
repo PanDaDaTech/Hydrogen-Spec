@@ -1642,6 +1642,10 @@ static void UiDrawToast(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
 static void SettingsDraw(Gdiplus::Graphics& g)
 {
+    // The window can end up at a different size than the one we asked for
+    // (DPI change on show, work-area clamp).  Re-derive the scale from the
+    // real client rect so drawing and hit testing always agree with it.
+    SyncSettingsSize();
     double sd = SettingsScale();
     const float s = (float)sd;
     const bool darkPage = (g_cfg.lightMode == 1) ? false

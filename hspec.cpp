@@ -3996,6 +3996,7 @@ static void RemoveTrayIcon(void)
 
 static void OpenSettings(void);
 static void OpenSettingsPage(int page);
+static void SyncSettingsSize(void);
 static void ShowPill(void);
 static void ShowTrayMenu(HWND hwnd);
 static void ApplyWindowVisibility(void);
@@ -5884,6 +5885,11 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         }
         return 0;
     }
+    case WM_SIZE:
+        SyncSettingsSize();
+        SettingsInvalidate();
+        return 0;
+
     case WM_LBUTTONDOWN: {
         int x = GET_X_LPARAM(lParam), y = GET_Y_LPARAM(lParam);
         int act = HitTest(x, y);
@@ -6157,6 +6163,24 @@ static void LoadLogoBitmaps(void)
     }
 }
 
+// Keep the drawing scale in sync with the real client area: the window manager
+// may clamp the initial size to the work area (small screens, high DPI), and a
+// scale that still assumes 1024x760 would draw clipped, oversized content.
+static void SyncSettingsSize(void)
+{
+    if (!g_setHwnd) return;
+    RECT cr;
+    if (!GetClientRect(g_setHwnd, &cr)) return;
+    if (cr.right <= 0 || cr.bottom <= 0) return;
+    g_setW = cr.right;
+    g_setH = cr.bottom;
+    float sw = (float)cr.right / 1024.0f;
+    float sh = (float)cr.bottom / 760.0f;
+    float s = (sw < sh) ? sw : sh;
+    if (s < 0.5f) s = 0.5f;
+    g_setScale = s;
+}
+
 static void OpenSettings(void)
 {
     LoadLogoBitmaps();
@@ -6218,6 +6242,7 @@ static void OpenSettings(void)
 
     ShowWindow(g_setHwnd, SW_SHOW);
     SetForegroundWindow(g_setHwnd);
+    SyncSettingsSize();
     ApplyWindowVisibility();
     HidePill();
     SettingsInvalidate();
