@@ -4010,6 +4010,14 @@ static void PositionWindow(void)
     if (x + g_winW > mi.rcMonitor.right) x = mi.rcMonitor.right - g_winW;
     if (y + g_winH > mi.rcMonitor.bottom) y = mi.rcMonitor.bottom - g_winH;
 
+    // 把设置里的偏移量折回屏幕上真正实现的量：箭头点到底时数字不能继续涨。
+    if (g_scale > 0.001) {
+        int baseX = mi.rcMonitor.right - g_winW - marginX;
+        int baseY = mi.rcMonitor.top + marginY;
+        g_cfg.posDx = (int)((x - baseX) / g_scale);
+        g_cfg.posDy = (int)((y - baseY) / g_scale);
+    }
+
     SetWindowPos(g_hwnd, NULL, x, y, g_winW, g_winH,
         SWP_NOZORDER | SWP_NOACTIVATE);
 }
