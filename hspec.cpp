@@ -1499,13 +1499,20 @@ struct Config
     int showMonitor, showBattery, showAudio, showPorts;
     int lightMode;   // 0 auto, 1 light, 2 dark
     int posDx, posDy; // panel offset in dp
+    // 窗口行为（[window] 节）
+    int hideTaskbar;  // 1 = 主窗口不出现在任务栏
+    int hideTray;     // 1 = 不显示托盘图标（仅当任务栏入口保留时可关）
+    int showPill;     // 1 = 隐藏主窗口后留下悬浮按钮
+    int hideHover;    // 1 = 鼠标移到面板上时淡出
+    int hideFull;     // 1 = 全屏应用前台时隐藏面板
 };
 
 static Config g_cfg = {
     THEME_PLAIN, 1, 250, 88, 16,   // theme / hueFollow / hue / opacity / radius
     1, 1, 1, 1, 1, 1, 1,           // cpu board mem disk gpu npu net
     1, 1, 1, 1,                    // monitor battery audio ports
-    0, 0, 0                        // lightMode / posDx / posDy
+    0, 0, 0,                       // lightMode / posDx / posDy
+    1, 0, 1, 1, 0                  // hideTaskbar / hideTray / showPill / hideHover / hideFull
 };
 static wchar_t g_iniPath[MAX_PATH] = { 0 };
 
@@ -1598,6 +1605,15 @@ static void LoadConfig(void)
     g_cfg.lightMode = ClampInt((int)GetPrivateProfileIntW(L"panel", L"lightMode", g_cfg.lightMode, g_iniPath), 0, 2);
     g_cfg.posDx = ClampInt((int)GetPrivateProfileIntW(L"panel", L"posDx", g_cfg.posDx, g_iniPath), -400, 400);
     g_cfg.posDy = ClampInt((int)GetPrivateProfileIntW(L"panel", L"posDy", g_cfg.posDy, g_iniPath), -400, 400);
+
+    g_cfg.hideTaskbar = ClampInt((int)GetPrivateProfileIntW(L"window", L"hideTaskbar", g_cfg.hideTaskbar, g_iniPath), 0, 1);
+    g_cfg.hideTray = ClampInt((int)GetPrivateProfileIntW(L"window", L"hideTray", g_cfg.hideTray, g_iniPath), 0, 1);
+    g_cfg.showPill = ClampInt((int)GetPrivateProfileIntW(L"window", L"showPill", g_cfg.showPill, g_iniPath), 0, 1);
+    g_cfg.hideHover = ClampInt((int)GetPrivateProfileIntW(L"window", L"hideHover", g_cfg.hideHover, g_iniPath), 0, 1);
+    g_cfg.hideFull = ClampInt((int)GetPrivateProfileIntW(L"window", L"hideFull", g_cfg.hideFull, g_iniPath), 0, 1);
+    // 不变量：任务栏入口都藏了，托盘图标必须留着，否则没有入口能叫回窗口。
+    if (g_cfg.hideTaskbar) g_cfg.hideTray = 0;
+    if (g_cfg.hideTray) g_cfg.showPill = 1;
 }
 
 static void SaveConfig(void)
@@ -1629,6 +1645,18 @@ static void SaveConfig(void)
     for (int i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++) {
         WPrintf(buf, 16, L"%d", items[i].value);
         WritePrivateProfileStringW(L"panel", items[i].key, buf, g_iniPath);
+    }
+
+    struct { const wchar_t* key; int value; } win[] = {
+        { L"hideTaskbar", g_cfg.hideTaskbar },
+        { L"hideTray", g_cfg.hideTray },
+        { L"showPill", g_cfg.showPill },
+        { L"hideHover", g_cfg.hideHover },
+        { L"hideFull", g_cfg.hideFull },
+    };
+    for (int i = 0; i < (int)(sizeof(win) / sizeof(win[0])); i++) {
+        WPrintf(buf, 16, L"%d", win[i].value);
+        WritePrivateProfileStringW(L"window", win[i].key, buf, g_iniPath);
     }
 }
 
@@ -2749,6 +2777,9 @@ static NOTIFYICONDATAW g_nid;
 static bool g_trayAdded = false;
 static UINT g_taskbarCreatedMsg = 0;
 static wchar_t g_dumpPath[MAX_PATH] = { 0 };
+// One-shot panel capture requested by the 导出 menu (screenshot item).
+static wchar_t g_capturePath[MAX_PATH] = { 0 };
+static bool g_captureOk = false;
 static wchar_t g_settingsDumpPath[MAX_PATH] = { 0 };
 static wchar_t g_infoDumpPath[MAX_PATH] = { 0 };
 static int g_dumpSetMode = 0;
@@ -3790,6 +3821,19 @@ static bool RenderInternal(void)
     if (!hbm) return false;
 
     DumpPanelIfRequested(bits);
+    if (g_capturePath[0]) {
+        wchar_t path[MAX_PATH];
+        wcsncpy_s(path, MAX_PATH, g_capturePath, _TRUNCATE);
+        g_capturePath[0] = 0;
+        g_captureOk = false;
+        CLSID png;
+        if (GetEncoderClsid(L"image/png", &png) >= 0) {
+            Gdiplus::Bitmap out(g_winW, g_winH, g_winW * 4, PixelFormat32bppPARGB,
+                (BYTE*)bits);
+            if (out.GetLastStatus() == Gdiplus::Ok)
+                g_captureOk = out.Save(path, &png, NULL) == Gdiplus::Ok;
+        }
+    }
 
     HDC screen = GetDC(NULL);
     HDC mem = CreateCompatibleDC(screen);
@@ -3952,38 +3996,9 @@ static void RemoveTrayIcon(void)
 
 static void OpenSettings(void);
 static void OpenSettingsPage(int page);
-
-static void ShowTrayMenu(HWND hwnd)
-{
-    POINT pt;
-    GetCursorPos(&pt);
-    HMENU menu = CreatePopupMenu();
-    if (!menu) return;
-    AppendMenuW(menu, MF_STRING, 3, L"设置…");
-    AppendMenuW(menu, MF_STRING, 1, L"刷新");
-    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING, 2, L"退出");
-    SetForegroundWindow(hwnd);
-    int cmd = (int)TrackPopupMenu(menu,
-        TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.x, pt.y, 0, hwnd, NULL);
-    DestroyMenu(menu);
-    PostMessageW(hwnd, WM_NULL, 0, 0);
-
-    if (cmd == 1) {
-        BuildModel();
-        ComputeLayout();
-        g_wallpaperStamp = WallpaperStamp();
-        UpdateTheme();
-        PositionWindow();
-        Render();
-        SendToDesktopLayer();
-    } else if (cmd == 2) {
-        DestroyWindow(hwnd);
-    } else if (cmd == 3) {
-        // 右键菜单的「设置…」直接落到二级设置页，而不是主界面
-        OpenSettingsPage(0);
-    }
-}
+static void ShowPill(void);
+static void ShowTrayMenu(HWND hwnd);
+static void ApplyWindowVisibility(void);
 
 // ===========================================================================
 // Settings window
@@ -4084,6 +4099,20 @@ enum
     ACT_BACK = 74,       // 返回上级
     ACT_OPEN_SET = 80,   // 进入设置（二级页面）
     ACT_SETNAV = 90,     // 设置内的分页 + index
+    ACT_UI_BLOCKER = 99, // 弹出层打开时吞掉下层点击
+    ACT_WIN_HIDE = 100,  // 标题栏：收起主窗口（留悬浮按钮）
+    ACT_EXPORT = 101,    // 导出菜单
+    ACT_EXPORT_ITEM = 102, // + 0 截图 / 1 纯文字 / 2 Markdown
+    ACT_REFRESH = 105,
+    ACT_REDETECT = 106,
+    ACT_SYS_PICK = 107,
+    ACT_SYS_OPT = 120,   // + index
+    ACT_HIDE_TASKBAR = 130,
+    ACT_HIDE_TRAY = 131,
+    ACT_SHOW_PILL = 132,
+    ACT_HIDE_HOVER = 133,
+    ACT_HIDE_FULL = 134,
+    ACT_MINIMIZE = 135,
 };
 
 enum {
@@ -4093,13 +4122,13 @@ enum {
 };
 
 struct HitRect { RECT rc; int act; };
-static HitRect g_hits[48];
+static HitRect g_hits[256];
 static int g_hitCount = 0;
 static RECT g_hueTrack, g_opTrack, g_radTrack;
 
 static void HitAdd(int x, int y, int w, int h, int act)
 {
-    if (g_hitCount >= 48) return;
+    if (g_hitCount >= 256) return;
     g_hits[g_hitCount].rc.left = x;
     g_hits[g_hitCount].rc.top = y;
     g_hits[g_hitCount].rc.right = x + w;
@@ -5510,7 +5539,10 @@ static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
     }
 }
 
-static void SettingsDraw(Gdiplus::Graphics& g)
+#include "hspec_ui.inc"
+
+// Legacy shell kept for reference while the v2 mockup shell lands.
+static void SettingsDrawLegacy(Gdiplus::Graphics& g)
 {
     double s = SettingsScale();
     // 明暗模式：浅色/深色强制，跟随则用壁纸明暗推断（和面板一致）
@@ -5740,6 +5772,13 @@ static void SetSliderFromX(int act, int x)
 
 static void PerformAction(int act)
 {
+    // The v2 shell handles everything that exists in the mockup.  Only the
+    // legacy 系统信息 buttons (保存 / 目录 / IP / 说明) fall through to the
+    // old MessageBox implementations below.
+    if (UiHandleAction(act)) {
+        SettingsInvalidate();
+        return;
+    }
     if (act >= ACT_NAV && act < ACT_NAV + 2) {
         g_mainTab = act - ACT_NAV;          // 主界面：硬件显示 / 目标系统信息
     } else if (act >= ACT_SETNAV && act < ACT_SETNAV + 3) {
@@ -5868,11 +5907,14 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 
     case WM_KEYDOWN:
         if (wParam == VK_ESCAPE) {
+            if (g_uiMenu) { g_uiMenu = 0; SettingsInvalidate(); return 0; }
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
             return 0;
         }
-        if (wParam == VK_TAB) {
-            g_setPage = (g_setPage + ((GetKeyState(VK_SHIFT) & 0x8000) ? 2 : 1)) % 3;
+        if (wParam == VK_TAB && g_setMode == 1) {
+            int pages = 4;
+            g_setPage = (g_setPage + ((GetKeyState(VK_SHIFT) & 0x8000) ? pages - 1 : 1)) % pages;
+            g_uiScroll = 0;
             SettingsInvalidate();
             return 0;
         }
@@ -5886,6 +5928,31 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
             return 0;
         }
         return 0;
+
+    case WM_MOUSEWHEEL: {
+        if (g_uiMenu != 0) return 0;
+        int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+        int step = (delta / WHEEL_DELTA) * 64;
+        int ny = g_uiScroll - step;
+        if (ny < 0) ny = 0;
+        if (ny > g_uiMaxScroll) ny = g_uiMaxScroll;
+        if (ny != g_uiScroll) {
+            g_uiScroll = ny;
+            SettingsInvalidate();
+        }
+        return 0;
+    }
+
+    case WM_TIMER:
+        if (wParam == 9) {
+            if (GetTickCount64() > g_toastUntil) {
+                g_toastText[0] = 0;
+                KillTimer(hwnd, 9);
+            }
+            SettingsInvalidate();
+            return 0;
+        }
+        break;
 
     case WM_SETCURSOR: {
         POINT pt;
@@ -5997,6 +6064,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
         return 0;
 
     case WM_DESTROY:
+        KillTimer(hwnd, 9);
         g_setHwnd = NULL;
         g_setDrag = 0;
         g_setHot = 0;
@@ -6096,6 +6164,7 @@ static void OpenSettings(void)
     if (g_setHwnd) {
         ShowWindow(g_setHwnd, SW_SHOW);
         SetForegroundWindow(g_setHwnd);
+        HidePill();
         SettingsInvalidate();
         return;
     }
@@ -6149,16 +6218,412 @@ static void OpenSettings(void)
 
     ShowWindow(g_setHwnd, SW_SHOW);
     SetForegroundWindow(g_setHwnd);
+    ApplyWindowVisibility();
+    HidePill();
     SettingsInvalidate();
 }
 
 static void OpenSettingsPage(int page)
 {
     g_setMode = 1;                       // 二级：设置
-    g_setPage = ClampInt(page, 0, 2);    // 0 外观 / 1 显示内容 / 2 关于
+    g_setPage = ClampInt(page, 0, 3);    // 0 外观 / 1 显示内容 / 2 窗口 / 3 关于
     OpenSettings();
 }
 
+// ===========================================================================
+// Hide to pill / window visibility
+// ===========================================================================
+//
+// 主窗口的隐藏按钮把 1024x760 的窗口收起来，桌面右下角留一个 48px 的圆角
+// 悬浮按钮；点它重新打开设置，拖它可以换位置。任务栏 / 托盘图标由
+// ApplyWindowVisibility 统一管理，入口至少保留一个。
+
+static HWND g_pillHwnd = NULL;
+static bool g_pillDrag = false;
+static bool g_pillMoved = false;
+static POINT g_pillGrab = { 0, 0 };
+static POINT g_pillStart = { 0, 0 };
+
+static bool IsFullscreenAppForeground(void)
+{
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == g_hwnd || fg == g_setHwnd || fg == g_pillHwnd) return false;
+    if (!IsWindowVisible(fg)) return false;
+    wchar_t cls[64] = { 0 };
+    GetClassNameW(fg, cls, 64);
+    if (!_wcsicmp(cls, L"Progman") || !_wcsicmp(cls, L"WorkerW") ||
+        !_wcsicmp(cls, L"Shell_TrayWnd") || !_wcsicmp(cls, L"Shell_SecondaryTrayWnd"))
+        return false;
+    RECT wr;
+    if (!GetWindowRect(fg, &wr)) return false;
+    MONITORINFO mi;
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mi))
+        return false;
+    return wr.left <= mi.rcMonitor.left && wr.top <= mi.rcMonitor.top &&
+           wr.right >= mi.rcMonitor.right && wr.bottom >= mi.rcMonitor.bottom;
+}
+
+static void PillPlace(void)
+{
+    if (!g_pillHwnd) return;
+    POINT origin = { 0, 0 };
+    MONITORINFO mi;
+    mi.cbSize = sizeof(mi);
+    GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi);
+    const int size = 48;
+    int x = mi.rcWork.right - size - 18;
+    int y = mi.rcWork.bottom - size - 18;
+    SetWindowPos(g_pillHwnd, HWND_TOPMOST, x, y, size, size,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+static void PaintPill(void)
+{
+    if (!g_pillHwnd) return;
+    const int size = 48;
+    Gdiplus::Bitmap bmp(size, size, PixelFormat32bppPARGB);
+    if (bmp.GetLastStatus() != Gdiplus::Ok) return;
+    {
+        Gdiplus::Graphics g(&bmp);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
+        g.Clear(Gdiplus::Color(0, 0, 0, 0));
+        Gdiplus::GraphicsPath path;
+        UiRoundRectPath(path, 1.0f, 1.0f, size - 2.0f, size - 2.0f, 14.0f);
+        Gdiplus::SolidBrush bg(OklchColor(0.66, 0.15, (double)HueDeg(), 255));
+        g.FillPath(&bg, &path);
+        g.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
+        DrawUiIcon(g, UI_EYE_OFF, size * 0.5f, size * 0.5f, 21.0f,
+            Gdiplus::Color(255, 255, 255, 255), 1.7f);
+    }
+
+    Gdiplus::BitmapData bd;
+    Gdiplus::Rect rc(0, 0, size, size);
+    if (bmp.LockBits(&rc, Gdiplus::ImageLockModeRead, PixelFormat32bppPARGB, &bd)
+            != Gdiplus::Ok)
+        return;
+
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = size;
+    bi.bmiHeader.biHeight = -size;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = NULL;
+    HBITMAP hbm = CreateDIBSection(NULL, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (hbm && bits) {
+        const BYTE* src = (const BYTE*)bd.Scan0;
+        int rowBytes = size * 4;
+        if (bd.Stride < 0) {
+            for (int y = 0; y < size; y++)
+                memcpy((BYTE*)bits + (size - 1 - y) * rowBytes,
+                    src + (size - 1 - y) * (-bd.Stride), rowBytes);
+        } else {
+            for (int y = 0; y < size; y++)
+                memcpy((BYTE*)bits + y * rowBytes, src + y * bd.Stride, rowBytes);
+        }
+    }
+    bmp.UnlockBits(&bd);
+    if (!hbm) return;
+
+    HDC screen = GetDC(NULL);
+    HDC mem = CreateCompatibleDC(screen);
+    HBITMAP old = (HBITMAP)SelectObject(mem, hbm);
+    BLENDFUNCTION bf;
+    bf.BlendOp = AC_SRC_OVER;
+    bf.BlendFlags = 0;
+    bf.SourceConstantAlpha = 255;
+    bf.AlphaFormat = AC_SRC_ALPHA;
+    RECT wr;
+    GetWindowRect(g_pillHwnd, &wr);
+    POINT dst = { wr.left, wr.top };
+    SIZE sz = { size, size };
+    POINT src = { 0, 0 };
+    UpdateLayeredWindow(g_pillHwnd, screen, &dst, &sz, mem, &src, 0, &bf, ULW_ALPHA);
+    SelectObject(mem, old);
+    DeleteDC(mem);
+    ReleaseDC(NULL, screen);
+    DeleteObject(hbm);
+}
+
+static LRESULT CALLBACK PillProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg) {
+    case WM_LBUTTONDOWN: {
+        POINT pt;
+        GetCursorPos(&pt);
+        RECT wr;
+        GetWindowRect(hwnd, &wr);
+        g_pillGrab.x = pt.x - wr.left;
+        g_pillGrab.y = pt.y - wr.top;
+        g_pillStart = pt;
+        g_pillDrag = true;
+        g_pillMoved = false;
+        SetCapture(hwnd);
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        if (g_pillDrag) {
+            POINT pt;
+            GetCursorPos(&pt);
+            if (abs(pt.x - g_pillStart.x) > 3 || abs(pt.y - g_pillStart.y) > 3)
+                g_pillMoved = true;
+            SetWindowPos(hwnd, HWND_TOPMOST, pt.x - g_pillGrab.x, pt.y - g_pillGrab.y,
+                0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        if (g_pillDrag) {
+            g_pillDrag = false;
+            ReleaseCapture();
+            if (!g_pillMoved) {
+                if (!g_setHwnd) OpenSettings();
+                else {
+                    ShowWindow(g_setHwnd, SW_SHOW);
+                    SetForegroundWindow(g_setHwnd);
+                    SettingsInvalidate();
+                }
+                ShowWindow(hwnd, SW_HIDE);
+            }
+        }
+        return 0;
+    case WM_RBUTTONUP:
+        ShowTrayMenu(g_hwnd ? g_hwnd : hwnd);
+        return 0;
+    default:
+        break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static void ShowPill(void)
+{
+    if (!g_cfg.showPill) return;
+    if (!g_pillHwnd) {
+        WNDCLASSEXW wc;
+        memset(&wc, 0, sizeof(wc));
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = PillProc;
+        wc.hInstance = GetModuleHandleW(NULL);
+        wc.hCursor = LoadCursorW(NULL, IDC_HAND);
+        wc.lpszClassName = L"HSpecPill";
+        RegisterClassExW(&wc);
+        g_pillHwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW |
+            WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+            L"HSpecPill", L"HSpec", WS_POPUP, 0, 0, 48, 48,
+            NULL, NULL, GetModuleHandleW(NULL), NULL);
+    }
+    if (!g_pillHwnd) return;
+    PillPlace();
+    PaintPill();
+    ShowWindow(g_pillHwnd, SW_SHOWNOACTIVATE);
+}
+
+static void HidePill(void)
+{
+    if (g_pillHwnd) ShowWindow(g_pillHwnd, SW_HIDE);
+}
+
+static void HideSettingsToPill(void)
+{
+    if (g_setHwnd) ShowWindow(g_setHwnd, SW_HIDE);
+    ShowPill();
+}
+
+static void ApplyWindowVisibility(void)
+{
+    if (g_setHwnd) {
+        LONG_PTR ex = GetWindowLongPtrW(g_setHwnd, GWL_EXSTYLE);
+        LONG_PTR want = g_cfg.hideTaskbar ? (ex | WS_EX_TOOLWINDOW)
+                                          : (ex & ~WS_EX_TOOLWINDOW);
+        if (want != ex) {
+            bool visible = IsWindowVisible(g_setHwnd) != FALSE;
+            if (visible) ShowWindow(g_setHwnd, SW_HIDE);
+            SetWindowLongPtrW(g_setHwnd, GWL_EXSTYLE, want);
+            SetWindowPos(g_setHwnd, NULL, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+            if (visible) {
+                ShowWindow(g_setHwnd, SW_SHOWNOACTIVATE);
+                SettingsInvalidate();
+            }
+        }
+    }
+
+    if (g_cfg.hideTray) {
+        RemoveTrayIcon();
+    } else if (g_hwnd) {
+        AddTrayIcon(g_hwnd, GetModuleHandleW(NULL));
+    }
+
+    bool open = (g_setHwnd && IsWindowVisible(g_setHwnd));
+    if (open || !g_cfg.showPill) HidePill();
+    else ShowPill();
+}
+
+static bool SavePanelPng(const wchar_t* path)
+{
+    if (!path || !path[0] || !g_hwnd) return false;
+    wcsncpy_s(g_capturePath, MAX_PATH, path, _TRUNCATE);
+    g_captureOk = false;
+    Render();
+    g_capturePath[0] = 0;
+    return g_captureOk;
+}
+
+
+
+static bool AutoStartEnabled(void)
+{
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_READ,
+            &key) != ERROR_SUCCESS)
+        return false;
+    wchar_t buf[MAX_PATH * 2] = { 0 };
+    DWORD cb = sizeof(buf);
+    DWORD type = 0;
+    bool on = RegQueryValueExW(key, L"HSpec", NULL, &type, (BYTE*)buf, &cb)
+        == ERROR_SUCCESS;
+    RegCloseKey(key);
+    return on;
+}
+
+static void SetAutoStart(bool on)
+{
+    HKEY key;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER,
+            L"Software\\Microsoft\\Windows\\CurrentVersion\\Run", 0, KEY_SET_VALUE,
+            &key) != ERROR_SUCCESS)
+        return;
+    if (on) {
+        wchar_t exe[MAX_PATH] = { 0 };
+        GetModuleFileNameW(NULL, exe, MAX_PATH);
+        wchar_t quoted[MAX_PATH + 2] = { 0 };
+        wcscpy_s(quoted, MAX_PATH + 2, L"\"");
+        wcscat_s(quoted, MAX_PATH + 2, exe);
+        wcscat_s(quoted, MAX_PATH + 2, L"\"");
+        RegSetValueExW(key, L"HSpec", 0, REG_SZ, (const BYTE*)quoted,
+            (DWORD)((wcslen(quoted) + 1) * sizeof(wchar_t)));
+    } else {
+        RegDeleteValueW(key, L"HSpec");
+    }
+    RegCloseKey(key);
+}
+
+static void ShowTrayMenu(HWND hwnd)
+{
+    POINT pt;
+    GetCursorPos(&pt);
+    HMENU menu = CreatePopupMenu();
+    if (!menu) return;
+
+    bool settingsOpen = (g_setHwnd && IsWindowVisible(g_setHwnd));
+
+    AppendMenuW(menu, MF_STRING | MF_GRAYED, 19, L"信息  @Lightning");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, 10, L"检查更新");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING | (settingsOpen ? MF_CHECKED : 0), 11,
+        L"隐藏主窗口");
+    AppendMenuW(menu, MF_STRING | (g_cfg.hideTaskbar ? MF_CHECKED : 0), 12,
+        L"隐藏任务栏窗口");
+    AppendMenuW(menu, MF_STRING | (g_cfg.hideTray ? MF_CHECKED : 0)
+        | (g_cfg.hideTaskbar ? MF_GRAYED : 0), 13, L"隐藏托盘图标");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, 14, L"刷新磁盘");
+    AppendMenuW(menu, MF_STRING | (AutoStartEnabled() ? MF_CHECKED : 0), 15,
+        L"开机启动");
+    AppendMenuW(menu, MF_STRING, 3, L"选项设置");
+    AppendMenuW(menu, MF_STRING, 16, L"产品策略");
+    AppendMenuW(menu, MF_STRING, 17, L"网络信息");
+    AppendMenuW(menu, MF_STRING, 1, L"刷新信息");
+    AppendMenuW(menu, MF_STRING, 18, L"导出报告");
+    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
+    AppendMenuW(menu, MF_STRING, 2, L"退出程序");
+
+    SetForegroundWindow(hwnd);
+    int cmd = (int)TrackPopupMenu(menu,
+        TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.x, pt.y, 0, hwnd, NULL);
+    DestroyMenu(menu);
+    PostMessageW(hwnd, WM_NULL, 0, 0);
+
+    auto refreshPanel = []() {
+        BuildModel();
+        ComputeLayout();
+        g_wallpaperStamp = WallpaperStamp();
+        UpdateTheme();
+        PositionWindow();
+        Render();
+        SendToDesktopLayer();
+    };
+
+    if (cmd == 1 || cmd == 14) {
+        refreshPanel();
+    } else if (cmd == 2) {
+        DestroyWindow(hwnd);
+    } else if (cmd == 3) {
+        // 右键菜单的「选项设置」直接落到二级设置页，而不是主界面
+        OpenSettingsPage(0);
+    } else if (cmd == 10) {
+        MessageBoxW(g_setHwnd,
+            L"当前版本 v1.0。\n\n检查更新请访问 GitHub Releases 页面。",
+            L"检查更新", MB_ICONINFORMATION | MB_OK);
+    } else if (cmd == 11) {
+        if (settingsOpen && g_setHwnd) {
+            ShowWindow(g_setHwnd, SW_HIDE);
+            if (g_cfg.showPill) ShowPill();
+        } else {
+            OpenSettings();
+        }
+    } else if (cmd == 12) {
+        if (g_cfg.hideTaskbar) g_cfg.hideTray = 0;
+        g_cfg.hideTaskbar = !g_cfg.hideTaskbar;
+        if (!g_cfg.hideTaskbar && g_cfg.hideTray) g_cfg.showPill = 1;
+        SaveConfig();
+        ApplyWindowVisibility();
+    } else if (cmd == 13) {
+        if (g_cfg.hideTaskbar) {
+            MessageBoxW(g_setHwnd, L"先恢复任务栏入口，才能隐藏托盘图标。",
+                L"HSpec", MB_ICONINFORMATION | MB_OK);
+        } else {
+            g_cfg.hideTray = !g_cfg.hideTray;
+            if (g_cfg.hideTray) g_cfg.showPill = 1;
+            SaveConfig();
+            ApplyWindowVisibility();
+        }
+    } else if (cmd == 15) {
+        SetAutoStart(!AutoStartEnabled());
+    } else if (cmd == 16) {
+        MessageBoxW(g_setHwnd,
+            L"产品策略：免费、离线、不收集任何信息。\n\n"
+            L"所有硬件资料都从本机读取，导出文件只写到你选择的目录。",
+            L"产品策略", MB_ICONINFORMATION | MB_OK);
+    } else if (cmd == 17) {
+        wchar_t ip[64] = { 0 };
+        GetLocalIpText(ip, 64);
+        wchar_t msg[320] = { 0 };
+        WPrintf(msg, 320, L"本机 IPv4 地址：\n\n%s",
+            ip[0] ? ip : L"未检测到已连接的网络");
+        MessageBoxW(g_setHwnd, msg, L"网络信息", MB_ICONINFORMATION | MB_OK);
+    } else if (cmd == 18) {
+        if (!g_tiReady) { CollectTargetInfo(&g_ti); g_tiReady = true; }
+        EnsureSaveDir();
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        wchar_t path[MAX_PATH] = { 0 };
+        WPrintf(path, MAX_PATH, L"%s\\系统信息_%04d%02d%02d_%02d%02d%02d.txt",
+            g_saveDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        if (SaveTargetInfo(path, &g_ti))
+            MessageBoxW(g_setHwnd, path, L"报告已导出", MB_ICONINFORMATION | MB_OK);
+        else
+            MessageBoxW(g_setHwnd, L"导出失败，请检查「文档」目录的写入权限。",
+                L"HSpec", MB_ICONWARNING | MB_OK);
+    }
+}
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -6194,9 +6659,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             // desktop WorkerW stack; a desktop widget should stay on the
             // wallpaper, so restore it and keep it anchored above that stack.
             if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) {
-                ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                PositionWindow();
-                Render();
+                if (!(g_cfg.hideFull && IsFullscreenAppForeground())) {
+                    ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+                    PositionWindow();
+                    Render();
+                }
             }
             SendToDesktopLayer();
         } else if (wParam == 3) {
@@ -6211,12 +6678,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             // ClassIsland-style hover: the panel is click-through, so poll the
             // cursor.  Over the panel -> fade out; off it -> fade back in.
             if (g_hwnd) {
-                POINT pt;
-                GetCursorPos(&pt);
-                RECT rc;
-                GetWindowRect(g_hwnd, &rc);
-                bool inside = PtInRect(&rc, pt) != FALSE;
-                int want = inside ? 0 : 255;
+                int want = 255;
+                if (g_cfg.hideHover) {
+                    POINT pt;
+                    GetCursorPos(&pt);
+                    RECT rc;
+                    GetWindowRect(g_hwnd, &rc);
+                    if (PtInRect(&rc, pt)) want = 0;
+                }
+                if (g_cfg.hideFull && IsFullscreenAppForeground()) want = 0;
                 if (want != g_hoverTarget) {
                     g_hoverTarget = want;
                     g_fadeStartTick = GetTickCount64();
@@ -6402,7 +6872,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
                     g_mainTab = ClampInt(_wtoi(argv[++i]), 0, 1);
                 } else if (wcscmp(argv[i], L"--tab") == 0 && i + 1 < argc) {
                     g_dumpSetMode = 1;
-                    g_settingsDumpPage = ClampInt(_wtoi(argv[++i]), 0, 2);
+                    g_settingsDumpPage = ClampInt(_wtoi(argv[++i]), 0, 3);
                 } else if (wcscmp(argv[i], L"--dump-info") == 0 && i + 1 < argc) {
                     wcsncpy_s(g_infoDumpPath, MAX_PATH, argv[++i], _TRUNCATE);
                 } else if (wcscmp(argv[i], L"--zoom") == 0 && i + 1 < argc) {
@@ -6458,6 +6928,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     Render();
     SendToDesktopLayer();
     AddTrayIcon(g_hwnd, hInstance);
+    ApplyWindowVisibility();
 
     if (g_openSettingsAtStart) OpenSettings();
 

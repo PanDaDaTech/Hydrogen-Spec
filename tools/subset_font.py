@@ -36,6 +36,8 @@ if hasattr(sys.stdout, "reconfigure"):
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "hspec.cpp"
+# The shell UI lives in an include file; its literals need the same coverage.
+SRC_EXTRA = ROOT / "hspec_ui.inc"
 HARDWARE = ROOT / "tools" / "hardware_words.txt"
 
 TTF_OUT = ROOT / "winres" / "MiSans-Medium.ttf"
@@ -116,6 +118,8 @@ def hardware_chars():
 def collect(include_hardware):
     chars = {chr(c) for c in range(0x20, 0x7F)}
     chars |= source_chars(SRC.read_text(encoding="utf-8", errors="replace"))
+    if SRC_EXTRA.exists():
+        chars |= source_chars(SRC_EXTRA.read_text(encoding="utf-8", errors="replace"))
     if include_hardware:
         chars |= hardware_chars()
     chars -= set("\r\n\t\0")
