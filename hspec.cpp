@@ -1496,11 +1496,17 @@ struct Config
     int opacity;
     int radius;
     int showCpu, showBoard, showMem, showDisk, showGpu, showNpu, showNet;
+    int showMonitor, showBattery, showAudio, showPorts;
     int lightMode;   // 0 auto, 1 light, 2 dark
     int posDx, posDy; // panel offset in dp
 };
 
-static Config g_cfg = { THEME_PLAIN, 1, 250, 88, 16, 1, 1, 1, 1, 1, 1, 0, 0, 0 };
+static Config g_cfg = {
+    THEME_PLAIN, 1, 250, 88, 16,   // theme / hueFollow / hue / opacity / radius
+    1, 1, 1, 1, 1, 1, 1,           // cpu board mem disk gpu npu net
+    1, 1, 1, 1,                    // monitor battery audio ports
+    0, 0, 0                        // lightMode / posDx / posDy
+};
 static wchar_t g_iniPath[MAX_PATH] = { 0 };
 
 static int ClampInt(int v, int lo, int hi)
@@ -1584,6 +1590,10 @@ static void LoadConfig(void)
     g_cfg.showDisk = ClampInt((int)GetPrivateProfileIntW(L"panel", L"disk", g_cfg.showDisk, g_iniPath), 0, 1);
     g_cfg.showGpu = ClampInt((int)GetPrivateProfileIntW(L"panel", L"gpu", g_cfg.showGpu, g_iniPath), 0, 1);
     g_cfg.showNpu = ClampInt((int)GetPrivateProfileIntW(L"panel", L"npu", g_cfg.showNpu, g_iniPath), 0, 1);
+    g_cfg.showMonitor = ClampInt((int)GetPrivateProfileIntW(L"panel", L"monitor", g_cfg.showMonitor, g_iniPath), 0, 1);
+    g_cfg.showBattery = ClampInt((int)GetPrivateProfileIntW(L"panel", L"battery", g_cfg.showBattery, g_iniPath), 0, 1);
+    g_cfg.showAudio = ClampInt((int)GetPrivateProfileIntW(L"panel", L"audio", g_cfg.showAudio, g_iniPath), 0, 1);
+    g_cfg.showPorts = ClampInt((int)GetPrivateProfileIntW(L"panel", L"ports", g_cfg.showPorts, g_iniPath), 0, 1);
     g_cfg.showNet = ClampInt((int)GetPrivateProfileIntW(L"panel", L"net", g_cfg.showNet, g_iniPath), 0, 1);
     g_cfg.lightMode = ClampInt((int)GetPrivateProfileIntW(L"panel", L"lightMode", g_cfg.lightMode, g_iniPath), 0, 2);
     g_cfg.posDx = ClampInt((int)GetPrivateProfileIntW(L"panel", L"posDx", g_cfg.posDx, g_iniPath), -400, 400);
@@ -1607,6 +1617,10 @@ static void SaveConfig(void)
         { L"disk", g_cfg.showDisk },
         { L"gpu", g_cfg.showGpu },
         { L"npu", g_cfg.showNpu },
+        { L"monitor", g_cfg.showMonitor },
+        { L"battery", g_cfg.showBattery },
+        { L"audio", g_cfg.showAudio },
+        { L"ports", g_cfg.showPorts },
         { L"net", g_cfg.showNet },
         { L"lightMode", g_cfg.lightMode },
         { L"posDx", g_cfg.posDx },
@@ -1718,13 +1732,19 @@ static Palette MakePalette(bool darkCard, int cardAlpha)
 // UI model
 // ===========================================================================
 
-enum IconKind { ICON_CPU = 0, ICON_BOARD, ICON_RAM, ICON_DISK, ICON_GPU, ICON_NET, ICON_NPU };
+enum IconKind {
+    ICON_CPU = 0, ICON_BOARD, ICON_RAM, ICON_DISK, ICON_GPU, ICON_NET, ICON_NPU,
+    ICON_MONITOR, ICON_BATTERY, ICON_AUDIO, ICON_PLUG, ICON_CLOCK, ICON_COUNT
+};
 
+// 明细行的两种写法：
+//   "标签: 值    标签2: 值2"  —— 旧格式，绘制时按 4 空格分块、再按冒号拆开
+//   "标签\x1f值"             —— 新格式（ModelAddKV），值里可以带冒号
 struct UiRow
 {
     int icon;
     wchar_t title[256];
-    wchar_t details[4][256];
+    wchar_t details[12][320];
     int detailCount;
 };
 
@@ -1752,8 +1772,43 @@ static UiRow* ModelAddRow(int icon, const wchar_t* title)
 
 static void ModelAddDetail(UiRow* r, const wchar_t* text)
 {
-    if (!r || r->detailCount >= 4) return;
-    wcsncpy_s(r->details[r->detailCount++], 256, text ? text : L"", _TRUNCATE);
+    if (!r || r->detailCount >= 12) return;
+    wcsncpy_s(r->details[r->detailCount++], 320, text ? text : L"", _TRUNCATE);
+}
+
+// 带标签的一条明细：值里可以有冒号、空格，不会被拆错。
+static void ModelAddKV(UiRow* r, const wchar_t* label, const wchar_t* value)
+{
+    if (!r || r->detailCount >= 12) return;
+
+    wchar_t item[320];
+    if (label && label[0])
+        WPrintf(item, 320, L"%s\x1f%s", label, value ? value : L"");
+    else
+        wcsncpy_s(item, 320, value ? value : L"", _TRUNCATE);
+
+    // 面板上一条明细就是一行：能塞进上一条就合并，省一行高度。
+    if (r->detailCount > 0) {
+        wchar_t* last = r->details[r->detailCount - 1];
+        if (wcslen(last) + 4 + wcslen(item) < 42) {
+            wcscat_s(last, 320, L"    ");
+            wcscat_s(last, 320, item);
+            return;
+        }
+    }
+    wcsncpy_s(r->details[r->detailCount++], 320, item, _TRUNCATE);
+}
+
+// 面板/导出用：把 "标签\x1f值" 变成 "标签: 值"
+static void KvToDisplay(const wchar_t* src, wchar_t* out, int cap)
+{
+    if (!out || cap <= 2) return;
+    int n = 0;
+    for (; src && *src && n < cap - 3; ++src) {
+        if (*src == 0x1f) { out[n++] = L':'; out[n++] = L' '; }
+        else out[n++] = *src;
+    }
+    out[n] = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1997,6 +2052,217 @@ static bool SaveTargetInfo(const wchar_t* path, const TargetInfo* t)
 }
 
 // ---------------------------------------------------------------------------
+// 电池 / 声卡 / 接口支持
+// 全部走 SetupDi + 注册表 + DeviceIoControl，不碰 WMI，PE 下可用。
+// 设备不存在时返回 false，调用方连分区都不建。
+// ---------------------------------------------------------------------------
+
+static const GUID kBatteryClassGuid = { 0x72631E54, 0x78A4, 0x11D0,
+    { 0xBC, 0xF7, 0x00, 0xAA, 0x00, 0xB7, 0xB3, 0x2A } };
+static const GUID kMediaClassGuid = { 0x4D36E96C, 0xE325, 0x11CE,
+    { 0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18 } };
+
+// batclass.h 里那几个常量，自己写一份省得拉头文件
+#define HSPEC_FILE_DEVICE_BATTERY 0x00000029
+#define HSPEC_IOCTL_BATTERY_QUERY_TAG \
+    CTL_CODE(HSPEC_FILE_DEVICE_BATTERY, 0x10, METHOD_BUFFERED, FILE_READ_ACCESS)
+#define HSPEC_IOCTL_BATTERY_QUERY_INFORMATION \
+    CTL_CODE(HSPEC_FILE_DEVICE_BATTERY, 0x11, METHOD_BUFFERED, FILE_READ_ACCESS)
+
+struct BatteryQueryInfo
+{
+    ULONG tag;
+    ULONG level;          // 0 = BatteryInformation
+    LONG atRate;
+};
+
+struct BatteryStaticInfo
+{
+    ULONG capabilities;
+    BYTE technology;
+    BYTE reserved[3];
+    BYTE chemistry[4];
+    ULONG designed;
+    ULONG full;
+    ULONG alert1;
+    ULONG alert2;
+    ULONG criticalBias;
+    ULONG cycles;
+};
+
+struct BatteryInfo
+{
+    wchar_t name[128];
+    int designed;      // mWh
+    int full;          // mWh
+    int cycles;
+    int percent;
+    bool present;
+    bool charging;
+    bool acOnline;
+};
+
+static int HealthPercent(int designed, int full)
+{
+    if (designed <= 0 || full <= 0) return -1;
+    int p = (int)((double)full * 100.0 / (double)designed + 0.5);
+    return ClampInt(p, 0, 150);
+}
+
+static bool ReadBattery(BatteryInfo* out)
+{
+    if (!out) return false;
+    memset(out, 0, sizeof(*out));
+
+    SYSTEM_POWER_STATUS ps;
+    if (GetSystemPowerStatus(&ps)) {
+        out->acOnline = ps.ACLineStatus == 1;
+        out->charging = ps.BatteryFlag != 128 && ps.BatteryFlag != 255;
+        out->percent = ps.BatteryLifePercent == 255 ? -1 : ps.BatteryLifePercent;
+    }
+
+    HDEVINFO devs = SetupDiGetClassDevsW(&kBatteryClassGuid, NULL, NULL, DIGCF_PRESENT);
+    if (devs == INVALID_HANDLE_VALUE) return false;
+
+    bool found = false;
+    SP_DEVICE_INTERFACE_DATA ifd;
+    ifd.cbSize = sizeof(ifd);
+    for (DWORD i = 0; SetupDiEnumDeviceInterfaces(devs, NULL, &kBatteryClassGuid, i, &ifd); i++) {
+        DWORD need = 0;
+        SetupDiGetDeviceInterfaceDetailW(devs, &ifd, NULL, 0, &need, NULL);
+        if (need == 0) continue;
+        BYTE* buf = (BYTE*)malloc(need);
+        if (!buf) continue;
+        SP_DEVICE_INTERFACE_DETAIL_DATA_W* det = (SP_DEVICE_INTERFACE_DETAIL_DATA_W*)buf;
+        det->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+        if (!SetupDiGetDeviceInterfaceDetailW(devs, &ifd, det, need, NULL, NULL)) {
+            free(buf);
+            continue;
+        }
+
+        HANDLE h = CreateFileW(det->DevicePath, GENERIC_READ | GENERIC_WRITE,
+            FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h == INVALID_HANDLE_VALUE) {
+            free(buf);
+            continue;
+        }
+
+        ULONG tag = 0, waited = 0;
+        if (DeviceIoControl(h, HSPEC_IOCTL_BATTERY_QUERY_TAG, &waited, sizeof(waited),
+                &tag, sizeof(tag), &waited, NULL) && tag != 0) {
+            BatteryQueryInfo qi;
+            memset(&qi, 0, sizeof(qi));
+            qi.tag = tag;
+            qi.level = 0;
+            BatteryStaticInfo bi;
+            memset(&bi, 0, sizeof(bi));
+            if (DeviceIoControl(h, HSPEC_IOCTL_BATTERY_QUERY_INFORMATION, &qi, sizeof(qi),
+                    &bi, sizeof(bi), &waited, NULL)) {
+                out->designed = (int)bi.designed;
+                out->full = (int)bi.full;
+                out->cycles = (int)bi.cycles;
+                found = true;
+            }
+        }
+        CloseHandle(h);
+        free(buf);
+        if (found) break;
+    }
+
+    // 拿不到容量也还算有电池：名字与电量仍然能显示
+    if (!found) {
+        SP_DEVINFO_DATA data;
+        data.cbSize = sizeof(data);
+        for (DWORD i = 0; SetupDiEnumDeviceInfo(devs, i, &data); i++) {
+            wchar_t nm[128] = { 0 };
+            GetDeviceString(devs, &data, SPDRP_FRIENDLYNAME, nm, 128);
+            if (!nm[0]) GetDeviceString(devs, &data, SPDRP_DEVICEDESC, nm, 128);
+            if (nm[0]) {
+                wcsncpy_s(out->name, 128, nm, _TRUNCATE);
+                found = true;
+                break;
+            }
+        }
+    }
+
+    SetupDiDestroyDeviceInfoList(devs);
+    if (found && !out->name[0]) wcsncpy_s(out->name, 128, L"笔记本电池", _TRUNCATE);
+    out->present = found;
+    return found;
+}
+
+// 声卡：Media 类里挑主设备（过滤 HDMI、虚拟线缆这类），其余只计数
+static int EnumAudio(wchar_t* first, int capFirst, int* total)
+{
+    if (total) *total = 0;
+    if (first && capFirst > 0) first[0] = 0;
+
+    HDEVINFO devs = SetupDiGetClassDevsW(&kMediaClassGuid, NULL, NULL, DIGCF_PRESENT);
+    if (devs == INVALID_HANDLE_VALUE) return 0;
+
+    static const wchar_t* kSkip[] = {
+        L"HDMI", L"Display Audio", L"Virtual", L"VB-Audio", L"Steam", L"Nahimic"
+    };
+    int n = 0;
+    SP_DEVINFO_DATA data;
+    data.cbSize = sizeof(data);
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(devs, i, &data); i++) {
+        wchar_t nm[192] = { 0 };
+        GetDeviceString(devs, &data, SPDRP_FRIENDLYNAME, nm, 192);
+        if (!nm[0]) GetDeviceString(devs, &data, SPDRP_DEVICEDESC, nm, 192);
+        if (!nm[0]) continue;
+        bool skip = false;
+        for (size_t k = 0; k < sizeof(kSkip) / sizeof(kSkip[0]); k++)
+            if (FindNoCase(nm, kSkip[k])) { skip = true; break; }
+        if (skip) continue;
+        n++;
+        if (first && !first[0]) {
+            TranslateVendorText(nm, 192);
+            wcsncpy_s(first, capFirst, nm, _TRUNCATE);
+        }
+    }
+    SetupDiDestroyDeviceInfoList(devs);
+    if (total) *total = n;
+    return n;
+}
+
+// 接口支持：用设备类是否有人在场来判断
+struct PortSpec
+{
+    const wchar_t* name;
+    const GUID* cls;
+    const wchar_t* proto;
+    int count;
+};
+
+static int CountClassDevices(const GUID* cls)
+{
+    HDEVINFO devs = SetupDiGetClassDevsW(cls, NULL, NULL, DIGCF_PRESENT);
+    if (devs == INVALID_HANDLE_VALUE) return 0;
+    int n = 0;
+    SP_DEVINFO_DATA data;
+    data.cbSize = sizeof(data);
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(devs, i, &data); i++) n++;
+    SetupDiDestroyDeviceInfoList(devs);
+    return n;
+}
+
+static const GUID kUsbClassGuid = { 0x36FC9E60, 0xC465, 0x11CF,
+    { 0x80, 0x56, 0x44, 0x45, 0x53, 0x54, 0x00, 0x00 } };
+static const GUID kKeyboardClassGuid = { 0x4D36E96B, 0xE325, 0x11CE,
+    { 0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18 } };
+static const GUID kMouseClassGuid = { 0x4D36E96F, 0xE325, 0x11CE,
+    { 0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18 } };
+static const GUID kImageClassGuid = { 0x6BDD1FC6, 0x810F, 0x11D0,
+    { 0xBE, 0xC7, 0x08, 0x00, 0x2B, 0xE2, 0x09, 0x2F } };
+static const GUID kNetClassGuid = { 0x4D36E972, 0xE325, 0x11CE,
+    { 0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18 } };
+static const GUID kCdromClassGuid = { 0x4D36E965, 0xE325, 0x11CE,
+    { 0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18 } };
+static const GUID kScsiClassGuid = { 0x4D36E97B, 0xE325, 0x11CE,
+    { 0xBF, 0xC1, 0x08, 0x00, 0x2B, 0xE1, 0x03, 0x18 } };
+
+// ---------------------------------------------------------------------------
 // NPU（神经网络加速器）
 // Win11 24H2 起这类设备归到 ComputeAccelerator 设备类；老系统或 PE 里
 // 没有该类时枚举结果为空，直接不显示，不影响其它分区。
@@ -2064,12 +2330,13 @@ static void BuildModel(void)
 
     UiRow* r = ModelAddRow(ICON_CPU, cpuBrand[0] ? cpuBrand : L"处理器");
     if (cores > 0) {
-        wchar_t d[128];
-        if (threads > cores)
-            WPrintf(d, 128, L"核心: %d    线程: %d", cores, threads);
-        else
-            WPrintf(d, 128, L"核心: %d", cores);
-        ModelAddDetail(r, d);
+        wchar_t d[32];
+        WPrintf(d, 32, L"%d", cores);
+        ModelAddKV(r, L"核心", d);
+        if (threads > cores) {
+            WPrintf(d, 32, L"%d", threads);
+            ModelAddKV(r, L"线程", d);
+        }
     }
 
     // ---- Board / firmware ----
@@ -2092,11 +2359,8 @@ static void BuildModel(void)
         WPrintf(boardTitle, 256, L"主板: %s", boardMfr);
     r = ModelAddRow(ICON_BOARD, boardTitle);
 
-    if (g_smbios.biosVersion[0]) {
-        wchar_t d[256];
-        WPrintf(d, 256, L"固件: %s", g_smbios.biosVersion);
-        ModelAddDetail(r, d);
-    }
+    if (g_smbios.biosVersion[0])
+        ModelAddKV(r, L"固件", g_smbios.biosVersion);
 
     int fw = GetFirmwareKind();
     int sb = (fw == 2) ? GetSecureBootState() : -1;
@@ -2111,14 +2375,10 @@ static void BuildModel(void)
         wcscpy_s(boot, 128, L"未知");
     }
     {
+        ModelAddKV(r, L"启动", boot);
         wchar_t cert[64] = { 0 };
-        bool haveCert = (fw == 2 && sb == 1) && CollectBootCert(cert, 64);
-        wchar_t d[256];
-        if (haveCert)
-            WPrintf(d, 256, L"启动: %s    证书: %s", boot, cert);
-        else
-            WPrintf(d, 256, L"启动: %s", boot);
-        ModelAddDetail(r, d);
+        if (fw == 2 && sb == 1 && CollectBootCert(cert, 64))
+            ModelAddKV(r, L"证书", cert);
     }
 
     // ---- Memory ----
@@ -2174,10 +2434,10 @@ static void BuildModel(void)
                 TranslateVendorText(m1, 128);
             }
             if (m1[0] && wcscmp(m1, m0) != 0)
-                WPrintf(d, 256, L"品牌: %s / %s", m0, m1);
+                WPrintf(d, 256, L"%s / %s", m0, m1);
             else
-                WPrintf(d, 256, L"品牌: %s", m0);
-            ModelAddDetail(r, d);
+                wcsncpy_s(d, 256, m0, _TRUNCATE);
+            ModelAddKV(r, L"品牌", d);
         }
     }
 
@@ -2189,26 +2449,15 @@ static void BuildModel(void)
             wcscat_s(memDetail, 256, L" / ");
             wcsncat_s(memDetail, 256, g_smbios.mem[1].part, _TRUNCATE);
         }
+        ModelAddKV(r, L"型号", memDetail);
+        wchar_t modSize[32] = { 0 };
+        if (g_smbios.memCount > 0)
+            FormatCapacity(g_smbios.mem[0].bytes, modSize, 32);
+        if (modSize[0]) ModelAddKV(r, L"单条容量", modSize);
         if (firstSpeed > 0) {
-            wchar_t modSize[32] = { 0 };
-            if (g_smbios.memCount > 0)
-                FormatCapacity(g_smbios.mem[0].bytes, modSize, 32);
-            wchar_t d[384];
-            if (modSize[0])
-                WPrintf(d, 384, L"型号: %s    %s    %d MHz", memDetail, modSize, firstSpeed);
-            else
-                WPrintf(d, 384, L"型号: %s    %d MHz", memDetail, firstSpeed);
-            ModelAddDetail(r, d);
-        } else {
-            wchar_t modSize[32] = { 0 };
-            if (g_smbios.memCount > 0)
-                FormatCapacity(g_smbios.mem[0].bytes, modSize, 32);
-            wchar_t d[384];
-            if (modSize[0])
-                WPrintf(d, 384, L"型号: %s    %s", memDetail, modSize);
-            else
-                WPrintf(d, 384, L"型号: %s", memDetail);
-            ModelAddDetail(r, d);
+            wchar_t sp[32];
+            WPrintf(sp, 32, L"%d MHz", firstSpeed);
+            ModelAddKV(r, L"频率", sp);
         }
     }
 
@@ -2263,6 +2512,33 @@ static void BuildModel(void)
         }
     }
 
+    // ---- 显示器（面板型号 / 分辨率 / 刷新率）----
+    g_skipSection = !g_cfg.showMonitor;
+    {
+        DisplayInfo di;
+        if (GetDisplayInfo(&di)) {
+            wchar_t title[256];
+            WPrintf(title, 256, L"显示器: 主屏 %s",
+                di.name[0] ? di.name : L"内置显示屏");
+            r = ModelAddRow(ICON_MONITOR, title);
+            if (di.diagIn > 3.0) {
+                wchar_t v[32];
+                WPrintf(v, 32, L"%.1f 英寸", di.diagIn);
+                ModelAddKV(r, L"尺寸", v);
+            }
+            if (di.w > 0 && di.h > 0) {
+                wchar_t v[48];
+                WPrintf(v, 48, L"%d × %d", di.w, di.h);
+                ModelAddKV(r, L"分辨率", v);
+            }
+            if (di.hz > 0) {
+                wchar_t v[32];
+                WPrintf(v, 32, L"%d Hz", di.hz);
+                ModelAddKV(r, L"刷新率", v);
+            }
+        }
+    }
+
     // ---- NPU（有设备才出现）----
     g_skipSection = !g_cfg.showNpu;
     if (!g_skipSection) {
@@ -2292,10 +2568,64 @@ static void BuildModel(void)
             r = ModelAddRow(ICON_DISK, title);
             wchar_t capText[32];
             FormatCapacity(disks[i].bytes, capText, 32);
-            wchar_t d[256];
-            WPrintf(d, 256, L"容量: %s    格式: %s    类型: %s",
-                capText, disks[i].style, disks[i].bus);
-            ModelAddDetail(r, d);
+            if (capText[0]) ModelAddKV(r, L"容量", capText);
+            if (disks[i].style[0]) ModelAddKV(r, L"格式", disks[i].style);
+            if (disks[i].bus[0]) ModelAddKV(r, L"总线", disks[i].bus);
+        }
+    }
+
+    // ---- 电池（拿不到容量也显示名字与电量）----
+    g_skipSection = !g_cfg.showBattery;
+    {
+        BatteryInfo bat;
+        if (ReadBattery(&bat)) {
+            wchar_t title[256];
+            WPrintf(title, 256, L"电池: %s", bat.name[0] ? bat.name : L"笔记本电池");
+            r = ModelAddRow(ICON_BATTERY, title);
+
+            if (bat.designed > 0) {
+                wchar_t v[32];
+                WPrintf(v, 32, L"%.1f Wh", (double)bat.designed / 1000.0);
+                ModelAddKV(r, L"设计容量", v);
+            }
+            if (bat.full > 0) {
+                wchar_t v[32];
+                WPrintf(v, 32, L"%.1f Wh", (double)bat.full / 1000.0);
+                ModelAddKV(r, L"满充容量", v);
+            }
+            int hp = HealthPercent(bat.designed, bat.full);
+            if (hp > 0) {
+                wchar_t v[32];
+                WPrintf(v, 32, L"%d%%", hp);
+                ModelAddKV(r, L"健康度", v);
+            }
+            if (bat.cycles > 0) {
+                wchar_t v[32];
+                WPrintf(v, 32, L"%d 次", bat.cycles);
+                ModelAddKV(r, L"循环次数", v);
+            }
+            if (bat.percent >= 0) {
+                wchar_t v[32];
+                WPrintf(v, 32, L"%d%%", bat.percent);
+                ModelAddKV(r, L"当前电量", v);
+            }
+        }
+    }
+
+    // ---- 声卡 ----
+    g_skipSection = !g_cfg.showAudio;
+    {
+        wchar_t au[192] = { 0 };
+        int total = 0;
+        if (EnumAudio(au, 192, &total) > 0) {
+            wchar_t title[256];
+            WPrintf(title, 256, L"声卡: %s", au);
+            r = ModelAddRow(ICON_AUDIO, title);
+            if (total > 1) {
+                wchar_t v[48];
+                WPrintf(v, 48, L"共 %d 个", total);
+                ModelAddKV(r, L"设备", v);
+            }
         }
     }
 
@@ -2341,6 +2671,33 @@ static void BuildModel(void)
             wcscat_s(line3, 384, nic.gateway);
         }
         if (line3[0]) ModelAddDetail(r, line3);
+    }
+
+    // ---- 接口支持（按设备类是否存在判断）----
+    g_skipSection = !g_cfg.showPorts;
+    {
+        struct PortSpec
+        {
+            const wchar_t* name;
+            const GUID* cls;
+            const wchar_t* proto;
+        };
+        static const PortSpec kPorts[] = {
+            { L"USB", &kUsbClassGuid, L"3.x 或更高" },
+            { L"键盘", &kKeyboardClassGuid, L"Keyboard" },
+            { L"触控板", &kMouseClassGuid, L"Mouse" },
+            { L"摄像头", &kImageClassGuid, L"Camera" },
+            { L"网络", &kNetClassGuid, L"Network" },
+            { L"SATA", &kScsiClassGuid, L"Serial" },
+            { L"光驱", &kCdromClassGuid, L"Optical" },
+            { L"音频", &kMediaClassGuid, L"Audio" },
+        };
+        UiRow* portRow = NULL;
+        for (size_t i = 0; i < sizeof(kPorts) / sizeof(kPorts[0]); i++) {
+            if (CountClassDevices(kPorts[i].cls) <= 0) continue;
+            if (!portRow) portRow = ModelAddRow(ICON_PLUG, L"接口支持");
+            ModelAddKV(portRow, kPorts[i].name, kPorts[i].proto);
+        }
     }
 
     g_skipSection = false;
@@ -2923,12 +3280,64 @@ static void DrawGlyph(Gdiplus::Graphics& g, Gdiplus::Pen& pen, int kind,
         break;
     }
     case ICON_GPU: {
-        // Display: monitor with stand.
+        // 显卡：卡身 + 风扇 + 金手指（显示器另用 ICON_MONITOR）
+        Gdiplus::GraphicsPath p;
+        AddRoundRect(p, Gdiplus::RectF(x + 2.2f * u, y + 5 * u, 19.6f * u, 11 * u), 2 * u);
+        g.DrawPath(&pen, &p);
+        g.DrawEllipse(&pen, x + 5.3f * u, y + 8 * u, 5 * u, 5 * u);
+        g.DrawLine(&pen, x + 12.6f * u, y + 8.6f * u, x + 18.8f * u, y + 8.6f * u);
+        g.DrawLine(&pen, x + 12.6f * u, y + 12.4f * u, x + 18.8f * u, y + 12.4f * u);
+        g.DrawLine(&pen, x + 8 * u, y + 16 * u, x + 8 * u, y + 18.2f * u);
+        g.DrawLine(&pen, x + 16 * u, y + 16 * u, x + 16 * u, y + 18.2f * u);
+        g.DrawLine(&pen, x + 8 * u, y + 18.2f * u, x + 16 * u, y + 18.2f * u);
+        break;
+    }
+    case ICON_MONITOR: {
         Gdiplus::GraphicsPath p;
         AddRoundRect(p, Gdiplus::RectF(x + 2 * u, y + 4 * u, 20 * u, 13 * u), 2 * u);
         g.DrawPath(&pen, &p);
         g.DrawLine(&pen, x + 12 * u, y + 17 * u, x + 12 * u, y + 20 * u);
         g.DrawLine(&pen, x + 8 * u, y + 20 * u, x + 16 * u, y + 20 * u);
+        break;
+    }
+    case ICON_BATTERY: {
+        Gdiplus::GraphicsPath p;
+        AddRoundRect(p, Gdiplus::RectF(x + 2.4f * u, y + 7.2f * u, 16 * u, 9.6f * u), 2.2f * u);
+        g.DrawPath(&pen, &p);
+        g.DrawLine(&pen, x + 20.6f * u, y + 10.6f * u, x + 20.6f * u, y + 13.4f * u);
+        g.DrawLine(&pen, x + 5.6f * u, y + 10.4f * u, x + 5.6f * u, y + 13.6f * u);
+        g.DrawLine(&pen, x + 9.2f * u, y + 10.4f * u, x + 9.2f * u, y + 13.6f * u);
+        break;
+    }
+    case ICON_AUDIO: {
+        Gdiplus::GraphicsPath p;
+        p.AddLine(x + 4 * u, y + 9.6f * u, x + 7.2f * u, y + 9.6f * u);
+        p.AddLine(x + 7.2f * u, y + 9.6f * u, x + 12 * u, y + 5.8f * u);
+        p.AddLine(x + 12 * u, y + 5.8f * u, x + 12 * u, y + 18.2f * u);
+        p.AddLine(x + 12 * u, y + 18.2f * u, x + 7.2f * u, y + 14.4f * u);
+        p.AddLine(x + 7.2f * u, y + 14.4f * u, x + 4 * u, y + 14.4f * u);
+        p.CloseFigure();
+        g.DrawPath(&pen, &p);
+        g.DrawArc(&pen, x + 12.4f * u, y + 7.8f * u, 5.2f * u, 8.4f * u, -55.0f, 110.0f);
+        g.DrawArc(&pen, x + 12.4f * u, y + 5.4f * u, 9.2f * u, 13.2f * u, -50.0f, 100.0f);
+        break;
+    }
+    case ICON_CLOCK: {
+        g.DrawEllipse(&pen, x + 4 * u, y + 4 * u, 16 * u, 16 * u);
+        g.DrawLine(&pen, x + 12 * u, y + 7.4f * u, x + 12 * u, y + 12 * u);
+        g.DrawLine(&pen, x + 12 * u, y + 12 * u, x + 15.4f * u, y + 14.2f * u);
+        break;
+    }
+    case ICON_PLUG: {
+        g.DrawLine(&pen, x + 9 * u, y + 3 * u, x + 9 * u, y + 7 * u);
+        g.DrawLine(&pen, x + 15 * u, y + 3 * u, x + 15 * u, y + 7 * u);
+        Gdiplus::GraphicsPath p;
+        p.AddLine(x + 6.6f * u, y + 7 * u, x + 17.4f * u, y + 7 * u);
+        p.AddLine(x + 17.4f * u, y + 7 * u, x + 17.4f * u, y + 10.4f * u);
+        p.AddArc(x + 6.6f * u, y + 4.4f * u, 10.8f * u, 12 * u, 0.0f, 180.0f);
+        p.AddLine(x + 6.6f * u, y + 10.4f * u, x + 6.6f * u, y + 7 * u);
+        g.DrawPath(&pen, &p);
+        g.DrawLine(&pen, x + 12 * u, y + 15.8f * u, x + 12 * u, y + 21 * u);
         break;
     }
     case ICON_NPU: {
@@ -3317,7 +3726,9 @@ static bool RenderInternal(void)
             (int)textX, (int)y, (int)textW, g_titleH);
         y += (float)g_titleH;
         for (int j = 0; j < row.detailCount; j++) {
-            DrawTextGdiLine(g, row.details[j], detailPx, FW_NORMAL, detailColor,
+            wchar_t disp[400];
+            KvToDisplay(row.details[j], disp, 400);
+            DrawTextGdiLine(g, disp, detailPx, FW_NORMAL, detailColor,
                 lightText, (int)textX, (int)y, (int)textW, g_detailH);
             y += (float)g_detailH;
         }
@@ -3663,7 +4074,11 @@ enum
     ACT_SETNAV = 90,     // 设置内的分页 + index
 };
 
-enum { TOGGLE_CPU = 0, TOGGLE_BOARD, TOGGLE_MEM, TOGGLE_DISK, TOGGLE_GPU, TOGGLE_NPU, TOGGLE_NET, TOGGLE_COUNT };
+enum {
+    TOGGLE_CPU = 0, TOGGLE_BOARD, TOGGLE_MEM, TOGGLE_GPU, TOGGLE_MONITOR,
+    TOGGLE_DISK, TOGGLE_BATTERY, TOGGLE_AUDIO, TOGGLE_NET, TOGGLE_PORTS,
+    TOGGLE_NPU, TOGGLE_COUNT
+};
 
 struct HitRect { RECT rc; int act; };
 static HitRect g_hits[48];
@@ -3696,6 +4111,10 @@ static int ToggleValue(int index)
     case TOGGLE_MEM: return g_cfg.showMem;
     case TOGGLE_DISK: return g_cfg.showDisk;
     case TOGGLE_GPU: return g_cfg.showGpu;
+    case TOGGLE_MONITOR: return g_cfg.showMonitor;
+    case TOGGLE_BATTERY: return g_cfg.showBattery;
+    case TOGGLE_AUDIO: return g_cfg.showAudio;
+    case TOGGLE_PORTS: return g_cfg.showPorts;
     case TOGGLE_NPU: return g_cfg.showNpu;
     case TOGGLE_NET: return g_cfg.showNet;
     }
@@ -3710,6 +4129,10 @@ static void ToggleFlip(int index)
     case TOGGLE_MEM: g_cfg.showMem = !g_cfg.showMem; break;
     case TOGGLE_DISK: g_cfg.showDisk = !g_cfg.showDisk; break;
     case TOGGLE_GPU: g_cfg.showGpu = !g_cfg.showGpu; break;
+    case TOGGLE_MONITOR: g_cfg.showMonitor = !g_cfg.showMonitor; break;
+    case TOGGLE_BATTERY: g_cfg.showBattery = !g_cfg.showBattery; break;
+    case TOGGLE_AUDIO: g_cfg.showAudio = !g_cfg.showAudio; break;
+    case TOGGLE_PORTS: g_cfg.showPorts = !g_cfg.showPorts; break;
     case TOGGLE_NPU: g_cfg.showNpu = !g_cfg.showNpu; break;
     case TOGGLE_NET: g_cfg.showNet = !g_cfg.showNet; break;
     default: return;
@@ -4355,19 +4778,25 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float x, float y, float w, float s, float availH)
 {
     const wchar_t* names[TOGGLE_COUNT] = {
-        L"处理器", L"主板与固件", L"内存", L"硬盘", L"显卡", L"NPU", L"网卡" };
+        L"处理器", L"主板与固件", L"内存", L"显卡", L"显示器",
+        L"硬盘", L"电池", L"声卡", L"网卡", L"接口支持", L"NPU" };
     const wchar_t* metas[TOGGLE_COUNT] = {
         L"型号 / 核心 / 线程",
         L"厂商 / 固件版本 / 启动方式 / 证书",
         L"品牌 / 型号 / 容量 / 频率",
-        L"型号 / 容量 / 分区格式 / 总线",
         L"型号 / 显存（当前使用的排在前面）",
-        L"神经网络加速器（处理器带 NPU 才有）",
-        L"类型 / MAC / IP / 速率 / SSID / 网关" };
+        L"面板 / 尺寸 / 分辨率 / 刷新率",
+        L"型号 / 容量 / 分区格式 / 总线",
+        L"设计容量 / 满充 / 健康度 / 循环次数",
+        L"型号 / 接口 / 采样",
+        L"类型 / MAC / IP / 速率 / SSID / 网关",
+        L"USB / 键鼠 / 摄像头 / 网络 / SATA / 音频",
+        L"神经网络加速器（处理器带 NPU 才有）" };
+
 
     // 行高在 84~104dp 之间自适应，正好铺满内容区，避免底部大片空白
     float rowH = (availH - 24 * s) / (float)TOGGLE_COUNT;
-    if (rowH < 84 * s) rowH = 84 * s;
+    if (rowH < 52 * s) rowH = 52 * s;
     if (rowH > 104 * s) rowH = 104 * s;
 
     const float cardH = TOGGLE_COUNT * rowH + 24 * s;
@@ -4396,7 +4825,8 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
         glyphPen.SetStartCap(Gdiplus::LineCapRound);
         glyphPen.SetEndCap(Gdiplus::LineCapRound);
         static const int kToggleIcon[TOGGLE_COUNT] = {
-            ICON_CPU, ICON_BOARD, ICON_RAM, ICON_DISK, ICON_GPU, ICON_NPU, ICON_NET };
+            ICON_CPU, ICON_BOARD, ICON_RAM, ICON_GPU, ICON_MONITOR,
+            ICON_DISK, ICON_BATTERY, ICON_AUDIO, ICON_NET, ICON_PLUG, ICON_NPU };
         DrawGlyph(g, glyphPen, kToggleIcon[i], prev.X + 8 * s, prev.Y + 12 * s,
             24 * s, (float)s);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 15 * s, 34 * s, 4 * s), 2 * s, pal.title);
@@ -4498,85 +4928,355 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
 // 主界面：硬件显示（Tab 1）
 // ---------------------------------------------------------------------------
 
+// 一行里的一个「标签 ｜ 值」组
+struct KvPair
+{
+    wchar_t label[64];
+    wchar_t value[288];
+};
+
+// 估算一段文字的宽度。GDI 的世界单位就是像素，这里只需要"够不够放"，
+// 不需要精确：中文按 1em、西文按 0.55em 算，误差在一两个像素内。
+static float EstTextW(const wchar_t* t, float px)
+{
+    float w = 0;
+    for (; t && *t; ++t) {
+        unsigned c = (unsigned)*t;
+        w += (c < 0x2E80) ? px * 0.55f : px * 0.99f;
+    }
+    return w;
+}
+
+static void HwMeasurerEnd(void);
+
+static HDC g_hwMeasDC = NULL;
+static HFONT g_hwMeasFont = NULL;
+static int g_hwMeasPx = 0;
+
+static void HwMeasurerBegin(int px)
+{
+    if (g_hwMeasDC && g_hwMeasPx == px) return;
+    HwMeasurerEnd();
+    HDC screen = GetDC(NULL);
+    g_hwMeasDC = CreateCompatibleDC(screen);
+    ReleaseDC(NULL, screen);
+    if (!g_hwMeasDC) return;
+    g_hwMeasFont = CreateFontW(-px, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        ANTIALIASED_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+        g_fontReady ? L"MiSans" : L"Microsoft YaHei");
+    if (g_hwMeasFont) SelectObject(g_hwMeasDC, g_hwMeasFont);
+    g_hwMeasPx = px;
+}
+
+static void HwMeasurerEnd(void)
+{
+    if (g_hwMeasFont) { DeleteObject(g_hwMeasFont); g_hwMeasFont = NULL; }
+    if (g_hwMeasDC) { DeleteDC(g_hwMeasDC); g_hwMeasDC = NULL; }
+    g_hwMeasPx = 0;
+}
+
+static float MeasureHw(const wchar_t* t)
+{
+    if (!t || !t[0]) return 0;
+    if (!g_hwMeasDC) return EstTextW(t, 12.5f * (float)SettingsScale());
+    SIZE sz;
+    if (GetTextExtentPoint32W(g_hwMeasDC, t, (int)wcslen(t), &sz))
+        return (float)sz.cx;
+    return 0;
+}
+
+static int SplitOne(const wchar_t* block, size_t len, KvPair* out)
+{
+    if (len == 0) return 0;
+    wchar_t buf[320];
+    if (len > 319) len = 319;
+    memcpy(buf, block, len * sizeof(wchar_t));
+    buf[len] = 0;
+
+    wchar_t* sep = wcschr(buf, 0x1f);
+    if (sep) {
+        *sep = 0;
+        wcsncpy_s(out->label, 64, buf, _TRUNCATE);
+        wcsncpy_s(out->value, 288, sep + 1, _TRUNCATE);
+        return 1;
+    }
+
+    wchar_t* colon = NULL;
+    for (wchar_t* q = buf; *q; ++q) {
+        if (*q == L':' || *q == L'\uFF1A') { colon = q; break; }
+        if (q - buf > 10) break;          // 标签不会长过 10 个字
+    }
+    if (colon) {
+        *colon = 0;
+        const wchar_t* v = colon + 1;
+        while (*v == L' ' || *v == L'\u3000') v++;
+        wcsncpy_s(out->label, 64, buf, _TRUNCATE);
+        wcsncpy_s(out->value, 288, v, _TRUNCATE);
+    } else {
+        out->label[0] = 0;
+        wcsncpy_s(out->value, 288, buf, _TRUNCATE);
+    }
+    return 1;
+}
+
+// "标签: 值    标签2: 值2" 或 "标签\x1f值" → 若干组
+static int SplitDetail(const wchar_t* src, KvPair* out, int cap)
+{
+    if (!src || !*src || cap <= 0) return 0;
+
+    int n = 0;
+    const wchar_t* p = src;
+    while (*p && n < cap) {
+        const wchar_t* end = wcsstr(p, L"    ");
+        size_t len = end ? (size_t)(end - p) : wcslen(p);
+        n += SplitOne(p, len, &out[n]);
+        if (!end) break;
+        p = end + 4;
+    }
+    return n;
+}
+
+static void CollectTargetInfo(TargetInfo* out);
+static TargetInfo g_ti;
+static bool g_tiReady = false;
+
+static int g_hwScroll = 0;
+static int g_hwMaxScroll = 0;
+
+static float HwPairWidth(const KvPair& kv, float s, float labelW, float valPx, float gap)
+{
+    float w = 0;
+    if (kv.label[0]) w += labelW + 9 * s + 1 + 9 * s;
+    w += MeasureHw(kv.value);
+    return w + gap;
+}
+
+// 一个分区占几行
+static int HwPairLines(const UiRow& row, float textW, float s, float labelW, float valPx)
+{
+    KvPair parts[12];
+    int lines = 1;
+    float used = 0;
+    for (int d = 0; d < row.detailCount; d++) {
+        int n = SplitDetail(row.details[d], parts, 12);
+        for (int i = 0; i < n; i++) {
+            float pw = HwPairWidth(parts[i], s, labelW, valPx, 20 * s);
+            bool wide = (parts[i].label[0] == 0);
+            if (used > 0 && ((wide) || used + pw > textW)) {
+                lines++;
+                used = pw;
+            } else {
+                used += pw;
+            }
+        }
+    }
+    return lines;
+}
+
+static void DrawSummaryCard(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int icon,
+    const wchar_t* cap, const wchar_t* value, const wchar_t* sub,
+    const Palette& pal, bool light, float s)
+{
+    FillRound(g, rc, 14 * s, pal.card);
+
+    const float box = 34 * s;
+    Gdiplus::RectF chip(rc.X + 14 * s, rc.Y + (rc.Height - box) * 0.5f, box, box);
+    FillRound(g, chip, 10 * s, pal.chipBg);
+
+    Gdiplus::Pen gp(pal.chipFg, 1.5f * s);
+    gp.SetLineJoin(Gdiplus::LineJoinRound);
+    gp.SetStartCap(Gdiplus::LineCapRound);
+    gp.SetEndCap(Gdiplus::LineCapRound);
+    float gsz = box * 0.56f;
+    DrawGlyph(g, gp, icon, chip.X + (box - gsz) * 0.5f, chip.Y + (box - gsz) * 0.5f, gsz, s);
+
+    float tx = chip.GetRight() + 12 * s;
+    float tw = rc.GetRight() - 14 * s - tx;
+    const bool hasSub = (sub && sub[0]);
+    // 三张卡的 cap 必须同一条基线，有没有副行都不许漂
+    SText(g, cap, 11.5f, FW_NORMAL, pal.detail, light, tx, rc.Y + 8 * s, tw, 15 * s);
+    SText(g, value, 13.5f, FW_NORMAL, pal.title, light, tx,
+        rc.Y + (hasSub ? 24 * s : 29 * s), tw, 19 * s);
+    if (hasSub)
+        SText(g, sub, 11.0f, FW_NORMAL, pal.detail, light, tx, rc.Y + 44 * s, tw, 15 * s);
+}
+
 static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float x, float y, float w, float s, float availH)
 {
     if (g_rowCount <= 0) return;
 
-    // 图吧工具箱式排版：一张连续卡片里按分区排「图标 + 标题 + 标签: 值」，
-    // 分区之间用发丝线分隔。行高按内容走，再把剩余高度均摊到分区间距，
-    // 这样既不会截断长型号，也不会在底部留一大片空白。
-    const float pad = 22 * s;
-    const float chip = 34 * s;
-    const float titleH = 16.5f;
-    const float lineH = 24 * s;
-    const float gapMin = 14 * s;
-    const float textX = x + pad + chip + 14 * s;
+    if (!g_tiReady) {
+        CollectTargetInfo(&g_ti);
+        g_tiReady = true;
+    }
+
+    // ---------------- 摘要三卡 ----------------
+    const float gapX = 12 * s;
+    const float sumH = 62 * s;
+    const float cw = (w - gapX * 2) / 3;
+
+    wchar_t model[256] = { 0 };
+    {
+        wchar_t mfr[128] = { 0 };
+        wcsncpy_s(mfr, 128, g_smbios.sysManufacturer, _TRUNCATE);
+        TranslateVendorText(mfr, 128);
+        if (mfr[0] && g_smbios.sysProduct[0])
+            WPrintf(model, 256, L"%s %s", mfr, g_smbios.sysProduct);
+        else if (g_smbios.sysProduct[0])
+            wcsncpy_s(model, 256, g_smbios.sysProduct, _TRUNCATE);
+        else if (g_ti.model[0])
+            wcsncpy_s(model, 256, g_ti.model, _TRUNCATE);
+        else
+            wcsncpy_s(model, 256, L"未知机型", _TRUNCATE);
+    }
+
+    wchar_t sysSub[128] = { 0 };
+    {
+        if (g_ti.releaseId[0] && g_ti.build[0])
+            WPrintf(sysSub, 128, L"%s · %s", g_ti.releaseId, g_ti.build);
+        else if (g_ti.build[0])
+            wcsncpy_s(sysSub, 128, g_ti.build, _TRUNCATE);
+    }
+
+    wchar_t upText[64] = { 0 };
+    {
+        ULONGLONG ms = GetTickCount64();
+        ULONGLONG days = ms / 86400000ULL;
+        ULONGLONG hours = (ms / 3600000ULL) % 24ULL;
+        ULONGLONG mins = (ms / 60000ULL) % 60ULL;
+        if (days > 0)
+            WPrintf(upText, 64, L"%llu 天 %llu 小时", days, hours);
+        else
+            WPrintf(upText, 64, L"%llu 小时 %llu 分", hours, mins);
+    }
+
+    DrawSummaryCard(g, Gdiplus::RectF(x, y, cw, sumH), ICON_BOARD,
+        L"机型型号", model, NULL, pal, light, s);
+    DrawSummaryCard(g, Gdiplus::RectF(x + cw + gapX, y, cw, sumH), ICON_MONITOR,
+        L"系统信息", g_ti.osName[0] ? g_ti.osName : L"Windows", sysSub, pal, light, s);
+    DrawSummaryCard(g, Gdiplus::RectF(x + (cw + gapX) * 2, y, cw, sumH), ICON_CLOCK,
+        L"运行时间", upText, NULL, pal, light, s);
+
+    // ---------------- 详细信息 ----------------
+    float hy = y + sumH + 12 * s;
+    SText(g, L"详细信息", 13.5f, FW_NORMAL, pal.title, light, x + 2 * s, hy, w, 20 * s);
+    float listTop = hy + 24 * s;
+    float listH = y + availH - listTop;
+    if (listH < 80 * s) listH = 80 * s;
+
+    const float pad = 18 * s;
+    const float chip = 30 * s;
+    const float titleH = 15.0f;
+    const float valPx = 12.5f;
+    const float valPxPx = valPx * (float)SettingsScale();
+    const float labelW = 54 * s;
+    const float lineH = 21 * s;
+    const float secGap = 11 * s;
+    const float textX = x + pad + chip + 12 * s;
     const float textW = x + w - pad - textX;
 
-    Gdiplus::RectF card(x, y, w, availH);
-    FillRound(g, card, 16 * s, pal.card);
+    HwMeasurerBegin((int)(valPx * (float)SettingsScale() + 0.5));
 
-    float natural = 0;
+    // 先算总高（两遍绘制里第一遍）
+    float natural = pad;
     for (int i = 0; i < g_rowCount; i++) {
-        float h = chip;
-        float detailH = g_rows[i].detailCount * lineH;
-        if (detailH + 4 * s > h) h = detailH + 4 * s;
-        natural += h;
+        int lines = HwPairLines(g_rows[i], textW, s, labelW, valPxPx);
+        float body = titleH * (float)s + 3 * s + lines * lineH;
+        natural += (body > chip ? body : chip) + secGap;
+        if (i == g_rowCount - 1) natural -= secGap;
     }
-    natural += gapMin * (g_rowCount - 1) + pad * 2;
+    natural += pad;
 
-    float gap = gapMin;
-    if (g_rowCount > 1 && natural < availH) {
-        gap += (availH - natural) / (float)(g_rowCount - 1);
-        if (gap > 46 * s) gap = 46 * s;
-    }
-    float cy = y + pad;
-    float blockH = 0;
-    for (int i = 0; i < g_rowCount; i++) {
-        float h = chip;
-        float detailH = g_rows[i].detailCount * lineH;
-        if (detailH + 4 * s > h) h = detailH + 4 * s;
-        blockH += h;
-    }
-    blockH += gap * (g_rowCount - 1);
-    if (blockH + pad * 2 < availH)
-        cy += (availH - pad * 2 - blockH) * 0.5f;   // 余量再居中，上下对称
+    g_hwMaxScroll = (int)(natural - listH);
+    if (g_hwMaxScroll < 0) g_hwMaxScroll = 0;
+    if (g_hwScroll > g_hwMaxScroll) g_hwScroll = g_hwMaxScroll;
+    if (g_hwScroll < 0) g_hwScroll = 0;
 
+    Gdiplus::GraphicsState st = g.Save();
+    Gdiplus::RectF listRect(x, listTop, w, listH);
+    g.SetClip(listRect);
+    g.TranslateTransform(0, -((float)g_hwScroll));
+
+    Gdiplus::RectF card(x, listTop, w, (natural > listH) ? natural : listH);
+    FillRound(g, card, 14 * s, pal.card);
+
+    float cy = listTop + pad;
     for (int i = 0; i < g_rowCount; i++) {
         const UiRow& row = g_rows[i];
-        const float detailH = row.detailCount * lineH;
-        const float rowH = (detailH + 4 * s > chip) ? detailH + 4 * s : chip;
+        int lines = HwPairLines(row, textW, s, labelW, valPxPx);
+        float body = titleH * (float)s + 3 * s + lines * lineH;
+        float rowH = (body > chip) ? body : chip;
 
         if (i > 0) {
             Gdiplus::Pen hair(pal.divider, 1.0f);
-            g.DrawLine(&hair, textX, cy - gap * 0.5f, x + w - pad, cy - gap * 0.5f);
+            g.DrawLine(&hair, textX, cy - secGap * 0.5f, x + w - pad, cy - secGap * 0.5f);
         }
 
-        // 分区图标：与面板卡片样式完全一致（圆角方块底 + 同一套字形）
-        Gdiplus::RectF box(x + pad, cy + (rowH - chip) * 0.5f, chip, chip);
-        Gdiplus::GraphicsPath bp;
-        AddRoundRect(bp, box, chip * 0.3f);
-        Gdiplus::SolidBrush chipBrush(pal.chipBg);
-        g.FillPath(&chipBrush, &bp);
-        Gdiplus::Pen gpen(pal.chipFg, 1.5f * s);
-        gpen.SetLineJoin(Gdiplus::LineJoinRound);
-        gpen.SetStartCap(Gdiplus::LineCapRound);
-        gpen.SetEndCap(Gdiplus::LineCapRound);
+        // 图标：和面板卡片样式同款（圆角方块 + 描边字形）
+        Gdiplus::RectF box(x + pad, cy + 1 * s, chip, chip);
+        FillRound(g, box, chip * 0.3f, pal.chipBg);
+        Gdiplus::Pen gp(pal.chipFg, 1.5f * s);
+        gp.SetLineJoin(Gdiplus::LineJoinRound);
+        gp.SetStartCap(Gdiplus::LineCapRound);
+        gp.SetEndCap(Gdiplus::LineCapRound);
         float gsz = chip * 0.56f;
-        DrawGlyph(g, gpen, row.icon, box.X + (chip - gsz) * 0.5f,
+        DrawGlyph(g, gp, row.icon, box.X + (chip - gsz) * 0.5f,
             box.Y + (chip - gsz) * 0.5f, gsz, s);
 
-        float tx = textX;
-        float ty = cy + 2 * s;
-        SText(g, row.title, titleH, FW_NORMAL, pal.title, light, tx, ty, textW, 26 * s);
-        ty += 26 * s;
+        float ty = cy + 1 * s;
+        SText(g, row.title, titleH, FW_NORMAL, pal.title, light, textX, ty, textW, 19 * s);
+        ty += titleH * (float)s + 3 * s;
+
+        // 明细：标签 ｜ 值，放不下换行
+        KvPair parts[12];
+        float cx = textX;
+        float cyy = ty;
         for (int d = 0; d < row.detailCount; d++) {
-            SText(g, row.details[d], 13.5f, FW_NORMAL, pal.detail, light,
-                tx, ty, textW, lineH);
-            ty += lineH;
+            int n = SplitDetail(row.details[d], parts, 12);
+            for (int k = 0; k < n; k++) {
+                const float pw = HwPairWidth(parts[k], s, labelW, valPxPx, 20 * s);
+                const bool wide = (parts[k].label[0] == 0);
+                if (cx > textX && (wide || cx + pw > textX + textW)) {
+                    cx = textX;
+                    cyy += lineH;
+                }
+                if (!wide) {
+                    SText(g, parts[k].label, valPx, FW_NORMAL, pal.detail, light,
+                        cx, cyy, labelW, lineH);
+                    const float sx = cx + labelW + 9 * s;
+                    Gdiplus::Pen sep(Gdiplus::Color(120, pal.detail.GetR(),
+                        pal.detail.GetG(), pal.detail.GetB()), 1.0f);
+                    g.DrawLine(&sep, sx, cyy + 6 * s, sx, cyy + lineH - 6 * s);
+                    SText(g, parts[k].value, valPx, FW_NORMAL, pal.title, light,
+                        sx + 10 * s, cyy, textW - (sx + 10 * s - textX), lineH);
+                    cx += labelW + 9 * s + 11 * s + MeasureHw(parts[k].value) + 20 * s;
+                } else {
+                    SText(g, parts[k].value, valPx, FW_NORMAL, pal.title, light,
+                        cx, cyy, textW, lineH);
+                    cx += MeasureHw(parts[k].value) + 20 * s;
+                }
+            }
         }
-        cy += rowH + gap;
+
+        cy += rowH + secGap;
+    }
+
+    g.Restore(st);
+
+    HwMeasurerEnd();
+
+    // 滚动条：只在内容超出时出现
+    if (g_hwMaxScroll > 0) {
+        float trackH = listH - 8 * s;
+        float thumbH = trackH * (listH / (listH + (float)g_hwMaxScroll));
+        if (thumbH < 24 * s) thumbH = 24 * s;
+        float t = (float)g_hwScroll / (float)g_hwMaxScroll;
+        float ty2 = listTop + 4 * s + (trackH - thumbH) * t;
+        Gdiplus::RectF thumb(x + w - 5 * s, ty2, 4 * s, thumbH);
+        FillRound(g, thumb, 2 * s,
+            Gdiplus::Color(140, pal.detail.GetR(), pal.detail.GetG(), pal.detail.GetB()));
     }
 }
 
@@ -4584,8 +5284,6 @@ static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
 // 系统信息页
 // ---------------------------------------------------------------------------
 
-static TargetInfo g_ti;
-static bool g_tiReady = false;
 static wchar_t g_saveDir[MAX_PATH] = { 0 };
 
 static void EnsureSaveDir(void)
@@ -4873,7 +5571,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     if (g_setMode == 0) {
         if (g_mainTab == 0) {
             title = L"硬件显示";
-            subtitle = L"这台机器的处理器、主板、内存、显卡与存储";
+            subtitle = L"机型、系统与全部硬件参数";
         } else {
             title = L"目标系统信息";
             subtitle = L"厂商、系统版本与用户目录，可一键保存成资料";
@@ -5511,6 +6209,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             SetTimer(hwnd, 3, 700, NULL);
         }
         return TRUE;
+
+    case WM_MOUSEWHEEL: {
+        // 硬件页分区比一屏多，滚轮翻；其它页面忽略
+        if (g_setMode == 0 && g_mainTab == 0) {
+            int delta = GET_WHEEL_DELTA_WPARAM(wParam);
+            g_hwScroll -= (delta / WHEEL_DELTA) * 56;
+            if (g_hwScroll < 0) g_hwScroll = 0;
+            if (g_hwScroll > g_hwMaxScroll) g_hwScroll = g_hwMaxScroll;
+            Render();
+        }
+        return 0;
+    }
 
     case WM_MOUSEACTIVATE:
         return MA_NOACTIVATE;

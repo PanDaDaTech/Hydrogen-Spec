@@ -1,17 +1,39 @@
 # Ethereal 主题 + 设置页 · 效果评估
 
-> **已落地（第一版）**：下面这些样张已经在 `hspec.cpp` 里实现——三档主题（纯文字 / 轻卡片 / Ethereal）、壁纸取色、不透明度与圆角、显示内容开关、以及自绘的设置窗口（外观 / 显示内容 / 关于三页）。本文保留原始评估与实现要点，作为后续改动的依据。
+> **已落地（第一版）**：三档主题（纯文字 / 轻卡片 / Ethereal）、壁纸取色、不透明度与圆角、
+> 显示内容开关、自绘设置窗口（外观 / 显示内容 / 关于三页）都已在 `hspec.cpp` 实现。
+> 本文保留原始评估与实现要点，作为后续改动的依据。
+>
+> **2026-11-15 样张重制**：样张现由 `src/render_mockups.py` 按
+> [`docs/design-spec.md`](../design-spec.md)（唯一样式依据）渲染，与
+> 「无粗体 + 大字号」改版后的实现 1:1 对齐。布局数值直接取自
+> `hspec.cpp` 的 `PageLook` / `PageContent` / `SettingsDraw`（卡片圆角 14、
+> 卡间距 14、滑杆行距 38、页标题 24 / 节标题 18 / 行名 15 / 说明 13.5）。
+> 含三张**新设计**样张（面板行为页、面板可点击交互、面板视觉升级）。
 
-HTML 原型渲染的样张，不是程序截图（字体、字号、色值、间距按 `hspec.cpp` 现有渲染参数 1:1 还原：标题 16px 粗、正文 14px、图标 24dp、面板 480dp 宽、行高 26/22、行距 9）。
+样张用 Edge 无头截图渲染（2x，oklch 与 MiSans Medium 直出），不是程序截图
+（程序截图见 `docs/preview.png`）。重新生成：
+
+```
+python docs/mockup/src/render_mockups.py        # 全部
+python docs/mockup/src/render_mockups.py theme  # 按名字筛选
+```
+
+依赖：`build/font-backup/MiSans-Medium.ttf`（不入库，见 `tools/subset_font.py`）
+与 Edge（`C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe`）。
+HTML 中间产物在 `src/_build/`，改样式改 `render_mockups.py` 里的参数。
 
 | 文件 | 内容 |
 | :--- | :--- |
-| `panel-light.png` | 浅色壁纸：现版纯文字 vs Ethereal 卡片 |
+| `panel-light.png` | 浅色壁纸：纯文字 vs Ethereal 卡片 |
 | `panel-dark.png` | 深色壁纸：同上 |
-| `panel-busy.png` | **复杂壁纸**：现版在明暗交界处丢字，卡片把对比度钉死 |
-| `settings-theme.png` | 设置页 · 外观（含三档主题缩略图） |
-| `settings-content.png` | 设置页 · 显示内容（每项带程序化缩略预览） |
-| `about.png` | 关于页 |
+| `panel-busy.png` | **复杂壁纸**：纯文字在明暗交界处丢字，卡片把对比度钉死 |
+| `settings-theme.png` | 设置页 · 外观（三档主题缩略图 / 主色 / 面板），浅 + 深 |
+| `settings-content.png` | 设置页 · 显示内容（六项开关），浅 + 深 |
+| `settings-behavior.png` | **设置页 · 面板行为（新设计）**：位置四角 / 缩放 / 刷新间隔，浅 + 深 |
+| `about.png` | 关于页，浅 + 深 |
+| `panel-interaction.png` | **面板可点击交互状态（新设计）**：默认 / hover / 点击复制反馈 + 状态机 |
+| `panel-upgrade.png` | **面板视觉升级方向（新设计）**：现状 vs 升级态 + 四个升级点 |
 
 ---
 
