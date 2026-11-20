@@ -15,6 +15,14 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    # 新增中文文案后如果忘了重建字体子集，界面上会出现缺字回退（整行换字体）。
+    # 这一步先比对 hspec.cpp 里所有字符与 winres/MiSans-Medium.ttf 的 cmap，缺字即失败。
+    - name: Check font subset
+      shell: cmd
+      run: |
+        python -m pip install --quiet fonttools
+        python tools/subset_font.py --check
+
     - name: Locate Visual Studio
       id: vs
       shell: cmd
