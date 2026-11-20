@@ -2795,6 +2795,9 @@ static const Gdiplus::Color kDetailColorLight(255, 205, 205, 205);
 static const Gdiplus::Color kIconColorLight(255, 235, 235, 235);
 
 static bool g_lightText = false;
+// 壁纸在面板区域里的亮度分带（10 段）：每一行文字按自己背后的亮度选深/浅字。
+static float g_lumBand[10] = { 0 };
+static bool g_lumValid = false;
 static Gdiplus::Color g_titleColor = kTitleColorDark;
 static Gdiplus::Color g_detailColor = kDetailColorDark;
 static Gdiplus::Color g_iconColor = kIconColorDark;
@@ -2924,6 +2927,8 @@ static void UpdateTheme(void)
                     // Circular mean of the saturated samples gives the accent
                     // hue; grey-ish samples would only dilute it.
                     double hueX = 0, hueY = 0, hueW = 0;
+                    double bandSum[10] = { 0 };
+                    int bandCnt[10] = { 0 };
                     for (int gy = 0; gy < 10; gy++) {
                         for (int gx = 0; gx < 10; gx++) {
                             int px = (int)((x + (gx + 0.5) * g_winW / 10.0) * sx);
@@ -2931,8 +2936,11 @@ static void UpdateTheme(void)
                             if (px < 0 || py < 0 || px >= iw || py >= ih) continue;
                             Gdiplus::Color c;
                             img.GetPixel(px, py, &c);
-                            sum += (c.GetR() * 299 + c.GetG() * 587 + c.GetB() * 114) / 1000.0;
+                            double lum = (c.GetR() * 299 + c.GetG() * 587 + c.GetB() * 114) / 1000.0;
+                            sum += lum;
                             cnt++;
+                            bandSum[gy] += lum;
+                            bandCnt[gy]++;
                             double ch = 0, hd = 0;
                             SrgbToOklchHue(c.GetR(), c.GetG(), c.GetB(), &ch, &hd);
                             if (ch > 0.045) {
@@ -2945,6 +2953,22 @@ static void UpdateTheme(void)
                     }
                     if (cnt > 0) {
                         g_lightText = (sum / cnt) < 118.0;
+                        for (int b = 0; b < 10; b++)
+                            g_lumBand[b] = bandCnt[b] ? (float)(bandSum[b] / bandCnt[b])
+                                                      : (float)(sum / cnt);
+                        g_lumValid = true;
+                        if (g_dumpPath[0]) {
+                            wchar_t dbg[MAX_PATH];
+                            WPrintf(dbg, MAX_PATH, L"%s.lum.txt", g_dumpPath);
+                            FILE* f = _wfopen(dbg, L"w");
+                            if (f) {
+                                fwprintf(f, L"win %d %d avg %.1f light %d\n", g_winW, g_winH,
+                                    sum / cnt, (int)g_lightText);
+                                for (int b = 0; b < 10; b++)
+                                    fwprintf(f, L"band %d %.1f\n", b, g_lumBand[b]);
+                                fclose(f);
+                            }
+                        }
                         if (hueW > 0.25) {
                             double deg = atan2(hueY, hueX) * 180.0 / 3.14159265358979323846;
                             if (deg < 0) deg += 360.0;
@@ -3765,14 +3789,45 @@ static bool RenderInternal(void)
             float iconY = y + ((float)g_titleH - (float)g_iconSize) * 0.5f;
             DrawGlyph(g, pen, row.icon, 2.0f * (float)s, iconY, (float)g_iconSize, (float)s);
         }
-        DrawTextGdiLine(g, row.title, titlePx, FW_NORMAL, titleColor, lightText,
+        // 纯文字主题直接贴在壁纸上：按这一行背后的壁纸亮度选深/浅字，
+        // 并在字下垫一层反色影，高亮与中间调壁纸上都不会漂。
+        bool rowLight = lightText;
+        Gdiplus::Color tc = titleColor, dc = detailColor;
+        Gdiplus::Color shadow(0, 0, 0, 0);
+        if (!card) {
+            int band = (int)((y + (float)g_titleH * 0.5f) * 10.0f / (float)g_winH);
+            band = ClampInt(band, 0, 9);
+            float lum = g_lumValid ? g_lumBand[band] : (g_lightText ? 40.0f : 220.0f);
+            // 中间调壁纸上两种字都糊，145 做分界更稳。
+            rowLight = lum < 145.0f;
+            tc = rowLight ? kTitleColorLight : kTitleColorDark;
+            dc = rowLight ? kDetailColorLight : kDetailColorDark;
+            shadow = rowLight ? Gdiplus::Color(135, 0, 0, 0)
+                              : Gdiplus::Color(150, 255, 255, 255);
+            // 四向 1px 描边光晕：照片壁纸上任何局部亮度都能压住。
+            for (int k = 0; k < 4; k++) {
+                int ox = (k == 0) ? -1 : (k == 1) ? 1 : 0;
+                int oy = (k == 2) ? -1 : (k == 3) ? 1 : 0;
+                DrawTextGdiLine(g, row.title, titlePx, FW_NORMAL, shadow, !rowLight,
+                    (int)textX + ox, (int)y + oy, (int)textW, g_titleH);
+            }
+        }
+        DrawTextGdiLine(g, row.title, titlePx, FW_NORMAL, tc, rowLight,
             (int)textX, (int)y, (int)textW, g_titleH);
         y += (float)g_titleH;
         for (int j = 0; j < row.detailCount; j++) {
             wchar_t disp[400];
             KvToDisplay(row.details[j], disp, 400);
-            DrawTextGdiLine(g, disp, detailPx, FW_NORMAL, detailColor,
-                lightText, (int)textX, (int)y, (int)textW, g_detailH);
+            if (!card) {
+                for (int k = 0; k < 4; k++) {
+                    int ox = (k == 0) ? -1 : (k == 1) ? 1 : 0;
+                    int oy = (k == 2) ? -1 : (k == 3) ? 1 : 0;
+                    DrawTextGdiLine(g, disp, detailPx, FW_NORMAL, shadow, !rowLight,
+                        (int)textX + ox, (int)y + oy, (int)textW, g_detailH);
+                }
+            }
+            DrawTextGdiLine(g, disp, detailPx, FW_NORMAL, dc,
+                rowLight, (int)textX, (int)y, (int)textW, g_detailH);
             y += (float)g_detailH;
         }
         if (split) {
@@ -4015,6 +4070,8 @@ static const wchar_t* kAppVersion = L"1.0";
 
 static const wchar_t* kSettingsClass = L"HSpecSettings";
 static HWND g_setHwnd = NULL;
+// 设置窗口是从悬浮球唤回的（标题栏给「隐藏」），还是从托盘菜单打开的（给「最小化」）。
+static bool g_settingsFromPill = false;
 static int g_setW = 0, g_setH = 0;
 static UINT g_setDpi = 96;
 // Effective dp->px scale for the settings window: the monitor DPI ratio,
@@ -4114,6 +4171,7 @@ enum
     ACT_HIDE_HOVER = 133,
     ACT_HIDE_FULL = 134,
     ACT_MINIMIZE = 135,
+    ACT_AUTOSTART = 136,
 };
 
 enum {
@@ -4323,29 +4381,14 @@ static void DrawThemeThumb(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int k
     g.GetClip(&saved);
     g.SetClip(&path);
 
-    // Miniature wallpaper: two soft blobs over a diagonal gradient.
-    {
-        Gdiplus::LinearGradientBrush sky(Gdiplus::PointF(rc.X, rc.Y),
-            Gdiplus::PointF(rc.GetRight(), rc.GetBottom()),
-            Gdiplus::Color(255, 84, 110, 158), Gdiplus::Color(255, 62, 74, 108));
-        g.FillRectangle(&sky, rc);
-        Gdiplus::SolidBrush warm(Gdiplus::Color(120, 214, 158, 96));
-        g.FillEllipse(&warm, rc.X + rc.Width * 0.55f, rc.Y + rc.Height * 0.45f,
-            rc.Width * 0.7f, rc.Height * 0.9f);
-        Gdiplus::SolidBrush cool(Gdiplus::Color(90, 90, 140, 210));
-        g.FillEllipse(&cool, rc.X - rc.Width * 0.2f, rc.Y - rc.Height * 0.15f,
-            rc.Width * 0.75f, rc.Height * 0.8f);
-    }
-
     float inset = 9 * s;
     Gdiplus::RectF sheet(rc.X + inset, rc.Y + inset,
         rc.Width - inset * 2, rc.Height - inset * 2);
 
-    bool light = pal.darkCard;
-    Gdiplus::Color barStrong = light ? Gdiplus::Color(200, 255, 255, 255)
-                                    : Gdiplus::Color(190, 24, 26, 32);
-    Gdiplus::Color barWeak = light ? Gdiplus::Color(110, 255, 255, 255)
-                                  : Gdiplus::Color(90, 24, 26, 32);
+    Gdiplus::Color barStrong = Gdiplus::Color(190, pal.title.GetR(), pal.title.GetG(),
+        pal.title.GetB());
+    Gdiplus::Color barWeak = Gdiplus::Color(95, pal.title.GetR(), pal.title.GetG(),
+        pal.title.GetB());
 
     if (kind == 0) {
         // Pure text: bars land straight on the wallpaper.
@@ -4366,7 +4409,8 @@ static void DrawThemeThumb(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int k
         for (int i = 0; i < 3; i++) {
             Gdiplus::RectF one(sheet.X, sheet.Y + i * (cardH + 3 * s),
                 sheet.Width, cardH);
-            Gdiplus::SolidBrush sheetBrush(Gdiplus::Color(196, 255, 255, 255));
+            Gdiplus::SolidBrush sheetBrush(Gdiplus::Color(225, pal.card.GetR(),
+                pal.card.GetG(), pal.card.GetB()));
             Gdiplus::GraphicsPath sp;
             AddRoundRect(sp, one, 5 * s);
             g.FillPath(&sheetBrush, &sp);
@@ -4383,12 +4427,13 @@ static void DrawThemeThumb(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int k
     }
 
     if (kind == 1) {
-        Gdiplus::SolidBrush sheetBrush(Gdiplus::Color(255, 255, 255, 255));
+        Gdiplus::SolidBrush sheetBrush(pal.card);
         Gdiplus::GraphicsPath sp;
         AddRoundRect(sp, sheet, 6 * s);
         g.FillPath(&sheetBrush, &sp);
     } else {
-        Gdiplus::SolidBrush sheetBrush(Gdiplus::Color(196, 255, 255, 255));
+        Gdiplus::SolidBrush sheetBrush(Gdiplus::Color(225, pal.card.GetR(),
+            pal.card.GetG(), pal.card.GetB()));
         Gdiplus::GraphicsPath sp;
         AddRoundRect(sp, sheet, 7 * s);
         g.FillPath(&sheetBrush, &sp);
@@ -6406,6 +6451,7 @@ static LRESULT CALLBACK PillProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPar
             g_pillDrag = false;
             ReleaseCapture();
             if (!g_pillMoved) {
+                g_settingsFromPill = true;
                 if (!g_setHwnd) OpenSettings();
                 else {
                     ShowWindow(g_setHwnd, SW_SHOW);
@@ -6539,36 +6585,110 @@ static void SetAutoStart(bool on)
     RegCloseKey(key);
 }
 
+// 右键菜单用自绘项，才能跟主界面同一套深色。
+// owner-draw 的 itemData 存文案指针，指针为 NULL 就是分隔线。
+static bool TrayMenuChecked(int id)
+{
+    if (id == 11) return g_setHwnd && IsWindowVisible(g_setHwnd);
+    if (id == 12) return g_cfg.hideTaskbar != 0;
+    if (id == 13) return g_cfg.hideTray != 0;
+    return false;
+}
+
+static void DrawTrayItem(const DRAWITEMSTRUCT* d)
+{
+    const wchar_t* text = (const wchar_t*)d->itemData;
+    Gdiplus::Graphics g(d->hDC);
+    g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    Gdiplus::RectF rc((float)d->rcItem.left, (float)d->rcItem.top,
+        (float)(d->rcItem.right - d->rcItem.left),
+        (float)(d->rcItem.bottom - d->rcItem.top));
+
+    if (!text) {
+        Gdiplus::Pen pen(Gdiplus::Color(255, 56, 58, 66), 1.0f);
+        g.DrawLine(&pen, rc.X + 12, rc.Y + rc.Height * 0.5f,
+            rc.GetRight() - 12, rc.Y + rc.Height * 0.5f);
+        return;
+    }
+
+    bool sel = (d->itemState & ODS_SELECTED) != 0;
+    bool dim = (d->itemState & ODS_DISABLED) != 0;   // 标题行用 MF_GRAYED 表达
+    Gdiplus::SolidBrush bg(sel ? Gdiplus::Color(255, 48, 50, 58)
+                               : Gdiplus::Color(255, 28, 29, 34));
+    g.FillRectangle(&bg, rc);
+    if (sel) {
+        Gdiplus::SolidBrush hl(Gdiplus::Color(255, 64, 67, 80));
+        Gdiplus::GraphicsPath path;
+        UiRoundRectPath(path, rc.X + 6, rc.Y + 2.5f, rc.Width - 12,
+            rc.Height - 5, 7.0f);
+        g.FillPath(&hl, &path);
+    }
+
+    if (TrayMenuChecked((int)d->itemID)) {
+        Gdiplus::Pen pen(Gdiplus::Color(255, 150, 156, 255), 1.7f);
+        pen.SetStartCap(Gdiplus::LineCapRound);
+        pen.SetEndCap(Gdiplus::LineCapRound);
+        float cx = rc.X + 17, cy = rc.Y + rc.Height * 0.5f;
+        g.DrawLine(&pen, cx - 3.5f, cy, cx - 1.0f, cy + 2.6f);
+        g.DrawLine(&pen, cx - 1.0f, cy + 2.6f, cx + 4.0f, cy - 3.0f);
+    }
+
+    Gdiplus::Color tc = dim ? Gdiplus::Color(255, 126, 128, 138)
+                            : Gdiplus::Color(255, 228, 229, 235);
+    Gdiplus::FontFamily fam(L"MiSans");
+    Gdiplus::Font font(&fam, 12.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
+    Gdiplus::SolidBrush tb(tc);
+    Gdiplus::StringFormat fmt;
+    fmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
+    fmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
+    g.DrawString(text, -1, &font, Gdiplus::RectF(rc.X + 32, rc.Y,
+        rc.Width - 44, rc.Height), &fmt, &tb);
+}
+
 static void ShowTrayMenu(HWND hwnd)
 {
     POINT pt;
     GetCursorPos(&pt);
+    bool settingsOpen = (g_setHwnd && IsWindowVisible(g_setHwnd));
     HMENU menu = CreatePopupMenu();
     if (!menu) return;
 
-    bool settingsOpen = (g_setHwnd && IsWindowVisible(g_setHwnd));
+    struct Entry { const wchar_t* text; int id; bool header; bool sep; };
+    static const Entry kEntries[] = {
+        { L"轻谱 · HSpec 1.0", 100, true, false },
+        { NULL, 0, false, true },
+        { L"关于轻谱", 20, false, false },
+        { NULL, 0, false, true },
+        { L"隐藏主窗口", 11, false, false },
+        { L"隐藏任务栏窗口", 12, false, false },
+        { L"隐藏托盘图标", 13, false, false },
+        { NULL, 0, false, true },
+        { L"刷新磁盘", 14, false, false },
+        { L"选项设置", 3, false, false },
+        { L"产品策略", 16, false, false },
+        { L"网络信息", 17, false, false },
+        { L"导出报告", 18, false, false },
+        { NULL, 0, false, true },
+        { L"退出程序", 2, false, false },
+    };
+    for (const Entry& e : kEntries) {
+        if (e.sep) {
+            AppendMenuW(menu, MF_OWNERDRAW | MF_SEPARATOR, 0, NULL);
+            continue;
+        }
+        UINT flags = MF_OWNERDRAW;
+        if (e.header) flags |= MF_GRAYED;
+        AppendMenuW(menu, flags, (UINT_PTR)e.id, (LPCWSTR)e.text);
+    }
+    // 任务栏入口还开着时，托盘图标不能被关掉（保持互斥）
+    if (g_cfg.hideTaskbar) {
+        EnableMenuItem(menu, 13, MF_BYCOMMAND | MF_GRAYED);
+    }
 
-    AppendMenuW(menu, MF_STRING | MF_GRAYED, 19, L"信息  @Lightning");
-    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING, 10, L"检查更新");
-    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING | (settingsOpen ? MF_CHECKED : 0), 11,
-        L"隐藏主窗口");
-    AppendMenuW(menu, MF_STRING | (g_cfg.hideTaskbar ? MF_CHECKED : 0), 12,
-        L"隐藏任务栏窗口");
-    AppendMenuW(menu, MF_STRING | (g_cfg.hideTray ? MF_CHECKED : 0)
-        | (g_cfg.hideTaskbar ? MF_GRAYED : 0), 13, L"隐藏托盘图标");
-    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING, 14, L"刷新磁盘");
-    AppendMenuW(menu, MF_STRING | (AutoStartEnabled() ? MF_CHECKED : 0), 15,
-        L"开机启动");
-    AppendMenuW(menu, MF_STRING, 3, L"选项设置");
-    AppendMenuW(menu, MF_STRING, 16, L"产品策略");
-    AppendMenuW(menu, MF_STRING, 17, L"网络信息");
-    AppendMenuW(menu, MF_STRING, 1, L"刷新信息");
-    AppendMenuW(menu, MF_STRING, 18, L"导出报告");
-    AppendMenuW(menu, MF_SEPARATOR, 0, NULL);
-    AppendMenuW(menu, MF_STRING, 2, L"退出程序");
+    MENUINFO mi = { sizeof(mi) };
+    mi.fMask = MIM_BACKGROUND;
+    mi.hbrBack = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    SetMenuInfo(menu, &mi);
 
     SetForegroundWindow(hwnd);
     int cmd = (int)TrackPopupMenu(menu,
@@ -6592,16 +6712,20 @@ static void ShowTrayMenu(HWND hwnd)
         DestroyWindow(hwnd);
     } else if (cmd == 3) {
         // 右键菜单的「选项设置」直接落到二级设置页，而不是主界面
+        g_settingsFromPill = false;
         OpenSettingsPage(0);
-    } else if (cmd == 10) {
-        MessageBoxW(g_setHwnd,
-            L"当前版本 v1.0。\n\n检查更新请访问 GitHub Releases 页面。",
-            L"检查更新", MB_ICONINFORMATION | MB_OK);
+    } else if (cmd == 20) {
+        // 「关于轻谱」：直接打开设置窗口的关于页
+        g_settingsFromPill = false;
+        g_setPage = 3;
+        OpenSettings();
+        SettingsInvalidate();
     } else if (cmd == 11) {
         if (settingsOpen && g_setHwnd) {
             ShowWindow(g_setHwnd, SW_HIDE);
             if (g_cfg.showPill) ShowPill();
         } else {
+            g_settingsFromPill = false;
             OpenSettings();
         }
     } else if (cmd == 12) {
@@ -6620,8 +6744,6 @@ static void ShowTrayMenu(HWND hwnd)
             SaveConfig();
             ApplyWindowVisibility();
         }
-    } else if (cmd == 15) {
-        SetAutoStart(!AutoStartEnabled());
     } else if (cmd == 16) {
         MessageBoxW(g_setHwnd,
             L"产品策略：免费、离线、不收集任何信息。\n\n"
@@ -6664,6 +6786,25 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         SetTimer(hwnd, 2, 800, NULL);
         SetTimer(hwnd, 4, 16, NULL);   // hover fade: cursor poll + animation
         return 0;
+
+    case WM_MEASUREITEM: {
+        MEASUREITEMSTRUCT* m = (MEASUREITEMSTRUCT*)lParam;
+        if (m && m->CtlType == ODT_MENU) {
+            m->itemHeight = m->itemData ? 30 : 9;
+            m->itemWidth = 168;
+            return TRUE;
+        }
+        break;
+    }
+
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT* d = (DRAWITEMSTRUCT*)lParam;
+        if (d && d->CtlType == ODT_MENU) {
+            DrawTrayItem(d);
+            return TRUE;
+        }
+        break;
+    }
 
     case WM_TIMER:
         if (wParam == 1) {

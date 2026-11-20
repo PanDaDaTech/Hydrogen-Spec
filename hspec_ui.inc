@@ -16,6 +16,8 @@ static void ApplyWindowVisibility(void);
 static bool SavePanelPng(const wchar_t* path);
 static void CopyVersionToClipboard(void);
 static void Render(void);
+static bool AutoStartEnabled(void);
+static void SetAutoStart(bool on);
 
 // ---------------------------------------------------------------------------
 // Tokens
@@ -1010,8 +1012,11 @@ static void PageSysUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         } else if (fw == 1) {
             wcscpy_s(boot, 64, L"Legacy BIOS");
         }
-        WPrintf(note, 512, L"当前系统：%s %s · Build %s%s%s",
-            t.manufacturer, t.model, t.build[0] ? t.build : L"—",
+        // 这里说的是“系统”，不是机器：给系统名 + 版本 + Build。
+        const wchar_t* sysName = t.osName[0] ? t.osName
+            : (t.edition[0] ? t.edition : L"Windows");
+        WPrintf(note, 512, L"当前系统：%s%s · Build %s%s%s",
+            sysName, t.releaseId[0] ? L" " : L"", t.build[0] ? t.build : L"—",
             t.ubr[0] ? L"." : L"", t.ubr);
         SText(g, note, 11, FW_NORMAL, u.t40, light, x, cy, w - 220 * s, 18 * s);
         if (boot[0])
@@ -1083,7 +1088,8 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     // ---- 面板样式 ----
     {
-        Gdiplus::RectF card(x, cy, w, 178 * s);
+        float cardH = 172 * s;
+        Gdiplus::RectF card(x, cy, w, cardH);
         UiCard(g, u, card, s);
         SText(g, L"面板样式", 14.5f, FW_NORMAL, u.deepText, light, x + 18 * s,
             y + 14 * s, 200 * s, 20 * s);
@@ -1095,9 +1101,11 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         float tileW = (tilesW - gap * 2) / 3;
         const wchar_t* names[3] = { L"纯文字", L"卡片", L"分离卡片" };
         Palette pal = MakePalette(light, 255);
+        // 三个样式块跟右侧预览一样高，标签压到底部，跟预览底沿齐平。
+        const float tileH = 118 * s;
 
         for (int i = 0; i < 3; i++) {
-            Gdiplus::RectF tile(x + 18 * s + (tileW + gap) * i, rowY, tileW, 74 * s);
+            Gdiplus::RectF tile(x + 18 * s + (tileW + gap) * i, rowY, tileW, tileH);
             bool on = (g_cfg.theme == i);
             FillRound(g, tile, 12 * s, on ? u.card : u.btnRegular);
             if (on) {
@@ -1106,23 +1114,24 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
                 UiRoundRectPath(p, tile.X, tile.Y, tile.Width, tile.Height, 12 * s);
                 g.DrawPath(&pen, &p);
             }
-            Gdiplus::RectF thumb(tile.X + 8 * s, tile.Y + 8 * s, tile.Width - 16 * s, 46 * s);
+            Gdiplus::RectF thumb(tile.X + 8 * s, tile.Y + 8 * s,
+                tile.Width - 16 * s, tileH - 34 * s);
             FillRound(g, thumb, 8 * s, u.page);
             DrawThemeThumb(g, thumb, i, pal, s);
             SText(g, names[i], 11.5f, FW_NORMAL, on ? u.titleActive : u.t40, light,
-                tile.X, tile.Y + 58 * s, tile.Width, 14 * s,
+                tile.X, tile.Y + tileH - 24 * s, tile.Width, 16 * s,
                 DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
             UiHit(tile.X, tile.Y, tile.Width, tile.Height, ACT_THEME + i);
         }
 
-        UiPreviewPanel(g, u, light, Gdiplus::RectF(x + w - 18 * s - pvW, rowY - 6 * s,
-            pvW, 118 * s), s);
-        cy += 178 * s + 12 * s;
+        UiPreviewPanel(g, u, light, Gdiplus::RectF(x + w - 18 * s - pvW, rowY,
+            pvW, tileH), s);
+        cy += cardH + 12 * s;
     }
 
     // ---- 主题色 ----
     {
-        float h = 208 * s;
+        float h = 214 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"主题色", 14.5f, FW_NORMAL, u.deepText, light, x + 18 * s, cy + 14 * s,
             200 * s, 20 * s);
@@ -1130,19 +1139,20 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         float ry = cy + 44 * s;
         SText(g, L"明暗模式", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, 120 * s, 20 * s);
         SText(g, L"跟随系统时读注册表的 AppsUseLightTheme", 11.5f, FW_NORMAL, u.t40, light,
-            x + 18 * s, ry + 20 * s, 300 * s, 16 * s);
+            x + 18 * s, ry + 21 * s, 300 * s, 16 * s);
         const wchar_t* modes[3] = { L"跟随系统", L"浅色", L"深色" };
-        UiSegmented(g, u, light, x + w - 18 * s - 240 * s, ry, 240 * s, 30 * s, modes, 3,
-            g_cfg.lightMode, ACT_LIGHT);
+        // 控件与「标题 + 说明」两行整体垂直居中，而不是顶着标题行。
+        UiSegmented(g, u, light, x + w - 18 * s - 240 * s, ry + 5 * s, 240 * s, 30 * s,
+            modes, 3, g_cfg.lightMode, ACT_LIGHT);
 
-        ry += 40 * s;
+        ry += 52 * s;
         SText(g, L"跟随壁纸取色", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, 200 * s, 20 * s);
         SText(g, L"从壁纸采样主色，换算成 oklch 的 hue", 11.5f, FW_NORMAL, u.t40, light,
-            x + 18 * s, ry + 20 * s, 300 * s, 16 * s);
-        UiSwitch(g, u, Gdiplus::RectF(x + w - 18 * s - 44 * s, ry + 2 * s, 44 * s, 24 * s),
+            x + 18 * s, ry + 21 * s, 300 * s, 16 * s);
+        UiSwitch(g, u, Gdiplus::RectF(x + w - 18 * s - 44 * s, ry + 8 * s, 44 * s, 24 * s),
             g_cfg.hueFollow != 0, false, ACT_HUE_FOLLOW);
 
-        ry += 36 * s;
+        ry += 52 * s;
         float stripW = w - 36 * s;
         Gdiplus::RectF strip(x + 18 * s, ry, stripW, 22 * s);
         {
@@ -1413,11 +1423,11 @@ static void PageWindowUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     // ---- 窗口 ----
     {
-        float h = 44 * s + 3 * 64 * s + 8 * s;
+        float h = 44 * s + 4 * 64 * s + 8 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"窗口", 14.5f, FW_NORMAL, u.deepText, light, x + 22 * s, cy + 14 * s,
             200 * s, 20 * s);
-        SText(g, L"决定主窗口在哪里留下入口，标题栏的隐藏按钮始终可用", 11.5f, FW_NORMAL,
+        SText(g, L"决定主窗口在哪里留下入口，设置窗口始终留一个回家的按钮", 11.5f, FW_NORMAL,
             u.t40, light, x + 68 * s, cy + 16 * s, 460 * s, 18 * s);
 
         float ry = cy + 44 * s;
@@ -1431,6 +1441,9 @@ static void PageWindowUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         UiSwitchRow(g, u, light, x, ry + 128 * s, w, L"显示悬浮按钮",
             L"主窗口收起后在桌面右下角留一个小按钮，点一下重新打开设置",
             g_cfg.showPill != 0, false, ACT_SHOW_PILL, s, true);
+        UiSwitchRow(g, u, light, x, ry + 192 * s, w, L"开机启动",
+            L"登录 Windows 后自动在桌面层铺好面板",
+            AutoStartEnabled(), false, ACT_AUTOSTART, s, true);
         cy += h + 12 * s;
     }
 
@@ -1559,19 +1572,19 @@ static void UiTitlebar(Gdiplus::Graphics& g, const UiStyle& u, bool light, float
     Gdiplus::RectF hide(close.X - 40 * s, by, 38 * s, 32 * s);
     Gdiplus::RectF mini(hide.X - 40 * s, by, 38 * s, 32 * s);
 
-    {
-        bool hot = (g_setHot == ACT_MINIMIZE);
-        if (hot) FillRound(g, mini, 8 * s, u.btnRegular);
-        DrawUiIcon(g, UI_MIN, UiCX(mini), UiCY(mini), 15 * s,
-            hot ? u.deepText : u.t60);
-        UiHit(mini.X, mini.Y, mini.Width, mini.Height, ACT_MINIMIZE);
-    }
-    {
+    // 从托盘菜单打开时给「最小化」；从悬浮球唤回时给「隐藏」，因为这时候它没有任务栏入口。
+    if (g_settingsFromPill) {
         bool hot = (g_setHot == ACT_WIN_HIDE);
         if (hot) FillRound(g, hide, 8 * s, u.btnRegular);
         DrawUiIcon(g, UI_EYE_OFF, UiCX(hide), UiCY(hide), 17 * s,
             hot ? u.deepText : u.t60);
         UiHit(hide.X, hide.Y, hide.Width, hide.Height, ACT_WIN_HIDE);
+    } else {
+        bool hot = (g_setHot == ACT_MINIMIZE);
+        if (hot) FillRound(g, mini, 8 * s, u.btnRegular);
+        DrawUiIcon(g, UI_MIN, UiCX(mini), UiCY(mini), 15 * s,
+            hot ? u.deepText : u.t60);
+        UiHit(mini.X, mini.Y, mini.Width, mini.Height, ACT_MINIMIZE);
     }
     {
         bool hot = (g_setHot == ACT_CLOSE);
@@ -1949,6 +1962,19 @@ static bool UiHandleAction(int act)
     }
     if (act == ACT_WIN_HIDE) {
         HideSettingsToPill();
+        return true;
+    }
+    if (act == ACT_MINIMIZE) {
+        // 没有任务栏入口（toolwindow）时 SW_MINIMIZE 不生效，退回悬浮球。
+        if (g_setHwnd) {
+            ShowWindow(g_setHwnd, SW_MINIMIZE);
+            if (!IsIconic(g_setHwnd)) HideSettingsToPill();
+        }
+        return true;
+    }
+    if (act == ACT_AUTOSTART) {
+        SetAutoStart(!AutoStartEnabled());
+        UiToast(AutoStartEnabled() ? L"已开启开机启动" : L"已关闭开机启动");
         return true;
     }
     if (act == ACT_CLOSE) {
