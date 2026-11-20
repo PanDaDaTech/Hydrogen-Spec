@@ -913,6 +913,56 @@ static const wchar_t* GpuVendorFallback(const wchar_t* key)
     return L"显卡";
 }
 
+// 网卡厂商中文名（与硬盘的 kDiskVendors 同一套写法）
+struct NicVendor { const wchar_t* en; const wchar_t* zh; };
+
+static const NicVendor kNicVendors[] = {
+    { L"MediaTek", L"联发科" },
+    { L"Qualcomm Atheros", L"高通创锐讯" },
+    { L"Qualcomm", L"高通" },
+    { L"Broadcom", L"博通" },
+    { L"Marvell", L"美满" },
+    { L"Realtek", L"瑞昱" },
+    { L"Intel", L"英特尔" },
+    { L"Ralink", L"雷凌" },
+};
+
+// 设备名里混进 PCI\VEN_10DE&DEV_... 这类硬件 ID 时一律清掉：
+// 面板上只需要人类可读的名字，ID 交给调用方的兜底逻辑。
+static void SanitizeDeviceName(wchar_t* s, int cap)
+{
+    if (!s || !s[0]) return;
+    if (FindNoCase(s, L"VEN_") || FindNoCase(s, L"DEV_") ||
+        FindNoCase(s, L"PCI\\") || FindNoCase(s, L"USB\\") ||
+        FindNoCase(s, L"&SUBSYS_") || FindNoCase(s, L"&REV_")) {
+        s[0] = 0;
+        return;
+    }
+    // 去掉尾部的 "(...)" 注释里带下划线的片段，如 "(R)" 保留，(Rev.xx) 去掉
+    for (;;) {
+        wchar_t* lp = wcsrchr(s, L'(');
+        if (!lp || !wcschr(lp, L'_')) break;
+        *lp = 0;
+        TrimW(s);
+    }
+}
+
+static void TranslateNicVendor(wchar_t* s, int cap)
+{
+    for (size_t i = 0; i < sizeof(kNicVendors) / sizeof(kNicVendors[0]); i++)
+        ReplaceAllNoCase(s, cap, kNicVendors[i].en, kNicVendors[i].zh);
+}
+
+static const wchar_t* NicVendorFallback(const wchar_t* key)
+{
+    if (!_wcsnicmp(key, L"10EC", 4)) return L"瑞昱 网卡";
+    if (!_wcsnicmp(key, L"8086", 4)) return L"英特尔 网卡";
+    if (!_wcsnicmp(key, L"14E4", 4)) return L"博通 网卡";
+    if (!_wcsnicmp(key, L"168C", 4)) return L"高通 网卡";
+    if (!_wcsnicmp(key, L"0BDA", 4)) return L"瑞昱 网卡";
+    return L"网卡";
+}
+
 struct GpuInfo { wchar_t name[192]; wchar_t key[9]; int rank; };
 
 static int GpuRank(const wchar_t* name)
@@ -1008,8 +1058,15 @@ static bool GetDisplayInfo(DisplayInfo* out)
         memset(&mon, 0, sizeof(mon));
         mon.cb = sizeof(mon);
         if (EnumDisplayDevicesW(adapter.DeviceName, 0, &mon, 0)) {
-            if (mon.DeviceString[0] && !FindNoCase(mon.DeviceString, L"Generic PnP"))
-                wcsncpy_s(out->name, 128, mon.DeviceString, _TRUNCATE);
+            if (mon.DeviceString[0] && !FindNoCase(mon.DeviceString, L"Generic PnP")) {
+                // PE 下显示器名可能是 \\.\DISPLAY1、RDPUDD 或硬件 ID，这类一律不要
+                wchar_t nm[128] = { 0 };
+                wcsncpy_s(nm, 128, mon.DeviceString, _TRUNCATE);
+                SanitizeDeviceName(nm, 128);
+                if (nm[0] && !wcschr(nm, L'\\') && !FindNoCase(nm, L"RDP") &&
+                    !FindNoCase(nm, L"Chained") && !FindNoCase(nm, L"Mirror Driver"))
+                    wcsncpy_s(out->name, 128, nm, _TRUNCATE);
+            }
 
             // EDID lives under the monitor's Enum key (DeviceID minus the
             // class-GUID tail) and gives the product name plus panel size.
@@ -1105,6 +1162,10 @@ static int EnumGpus(GpuInfo* out, int cap)
             GetDeviceString(devs, &data, SPDRP_FRIENDLYNAME, name, 192);
             if (!name[0]) GetDeviceString(devs, &data, SPDRP_DEVICEDESC, name, 192);
         }
+        if (!name[0]) continue;
+        SanitizeDeviceName(name, 192);
+        if (!name[0] && hasKey)
+            wcsncpy_s(name, 192, GpuVendorFallback(key), _TRUNCATE);
         if (!name[0]) continue;
         if (FindNoCase(name, L"Basic Render Driver")) continue;
         if (FindNoCase(name, L"Microsoft Basic") && hasKey)
@@ -1376,6 +1437,11 @@ static int EnumNics(NicInfo* out, int cap)
             GetDeviceString(devs, &data, SPDRP_FRIENDLYNAME, name, 192);
             if (!name[0]) GetDeviceString(devs, &data, SPDRP_DEVICEDESC, name, 192);
         }
+        if (!name[0] && hasKey)
+            wcsncpy_s(name, 192, NicVendorFallback(key), _TRUNCATE);
+        if (!name[0]) continue;
+        SanitizeDeviceName(name, 192);
+        TranslateNicVendor(name, 192);
         if (!name[0]) continue;
         if (NameHasAny(name, kVirtual, 11)) continue;
 
@@ -3087,6 +3153,9 @@ static void DumpPanelIfRequested(const void* bits)
         out.Save(path, &png, NULL);
 }
 
+static void DrawHwIconGlyph(Gdiplus::Graphics& g, int kind, float cx, float cy, float r,
+    const Gdiplus::Color& fg);
+
 static bool RenderInternal(void)
 {
     if (!g_hwnd || g_winW <= 0 || g_winH <= 0) return false;
@@ -3162,13 +3231,17 @@ static bool RenderInternal(void)
             Gdiplus::SolidBrush chipBrush(pal.chipBg);
             g.FillPath(&chipBrush, &cp);
 
-            float glyph = (float)g_chipSize * 0.56f;
-            DrawGlyph(g, pen, row.icon,
-                chip.X + ((float)g_chipSize - glyph) * 0.5f,
-                chip.Y + ((float)g_chipSize - glyph) * 0.5f, glyph, (float)s);
+            // 与设置页「硬件显示」用同一套 pictogram
+            DrawHwIconGlyph(g, row.icon,
+                chip.X + (float)g_chipSize * 0.5f,
+                chip.Y + (float)g_chipSize * 0.5f,
+                (float)g_chipSize * 0.33f, iconColor);
         } else {
             float iconY = y + ((float)g_titleH - (float)g_iconSize) * 0.5f;
-            DrawGlyph(g, pen, row.icon, 2.0f * (float)s, iconY, (float)g_iconSize, (float)s);
+            DrawHwIconGlyph(g, row.icon,
+                2.0f * (float)s + (float)g_iconSize * 0.5f,
+                iconY + (float)g_iconSize * 0.5f,
+                (float)g_iconSize * 0.36f, iconColor);
         }
         DrawTextGdiLine(g, row.title, titlePx, FW_NORMAL, titleColor, lightText,
             (int)textX, (int)y, (int)textW, g_titleH);
@@ -4196,7 +4269,7 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
         L"厂商 / 固件版本 / 启动方式 / 证书",
         L"品牌 / 型号 / 容量 / 频率",
         L"型号 / 容量 / 分区格式 / 总线",
-        L"型号（PE 下 PCI ID 兜底）",
+        L"型号 / 显存（当前使用的排在前面）",
         L"类型 / MAC / IP / 速率 / SSID / 网关" };
 
     // 行高在 84~104dp 之间自适应，正好铺满内容区，避免底部大片空白
@@ -4229,7 +4302,7 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
         glyphPen.SetLineJoin(Gdiplus::LineJoinRound);
         glyphPen.SetStartCap(Gdiplus::LineCapRound);
         glyphPen.SetEndCap(Gdiplus::LineCapRound);
-        DrawGlyph(g, glyphPen, i, prev.X + 8 * s, prev.Y + 12 * s, 24 * s, (float)s);
+        DrawHwIconGlyph(g, i, prev.X + 20 * s, prev.Y + 24 * s, 8.6f * (float)s, pal.chipFg);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 15 * s, 34 * s, 4 * s), 2 * s, pal.title);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 25 * s, 30 * s, 3 * s), 1.5f * s, pal.detail);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 33 * s, 24 * s, 3 * s), 1.5f * s, pal.detail);
@@ -4330,14 +4403,12 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
 // ---------------------------------------------------------------------------
 
 // Hardware pictograms on the same 24dp grid as the rail icons.
-static void DrawHwIcon(Gdiplus::Graphics& g, int kind, float cx, float cy, float r,
-    const Palette& pal)
+// 硬件字形（不含底）：面板与设置页共用同一套 pictogram。
+static void DrawHwIconGlyph(Gdiplus::Graphics& g, int kind, float cx, float cy, float r,
+    const Gdiplus::Color& fg)
 {
-    Gdiplus::SolidBrush bg(pal.chipBg);
-    g.FillEllipse(&bg, cx - r, cy - r, r * 2, r * 2);
-
     const float u = r / 10.5f;
-    Gdiplus::Pen pen(pal.chipFg, 1.7f * u);
+    Gdiplus::Pen pen(fg, 1.7f * u);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
@@ -4361,17 +4432,19 @@ static void DrawHwIcon(Gdiplus::Graphics& g, int kind, float cx, float cy, float
         break;
     }
     case ICON_BOARD: {
+        // 主板：板 + CPU 插座 + 三条内存插槽
         Gdiplus::GraphicsPath bd;
-        AddRoundRect(bd, Gdiplus::RectF(cx - 7.0f * u, cy - 6.4f * u, 14.0f * u, 12.8f * u),
+        AddRoundRect(bd, Gdiplus::RectF(cx - 7.4f * u, cy - 6.0f * u, 14.8f * u, 12.0f * u),
             2.0f * u);
         g.DrawPath(&pen, &bd);
         Gdiplus::GraphicsPath chip;
-        AddRoundRect(chip, Gdiplus::RectF(cx - 4.4f * u, cy - 3.8f * u, 4.6f * u, 4.6f * u),
+        AddRoundRect(chip, Gdiplus::RectF(cx - 5.0f * u, cy - 3.6f * u, 4.8f * u, 4.8f * u),
             1.0f * u);
         g.DrawPath(&pen, &chip);
-        g.DrawLine(&pen, cx + 1.6f * u, cy - 3.4f * u, cx + 4.6f * u, cy - 3.4f * u);
-        g.DrawLine(&pen, cx + 1.6f * u, cy + 0.4f * u, cx + 4.6f * u, cy + 0.4f * u);
-        g.DrawLine(&pen, cx - 4.4f * u, cy + 3.4f * u, cx + 4.6f * u, cy + 3.4f * u);
+        for (int k = 0; k < 3; k++) {
+            float sx = cx + (1.6f + k * 1.8f) * u;
+            g.DrawLine(&pen, sx, cy - 3.6f * u, sx, cy + 3.6f * u);
+        }
         break;
     }
     case ICON_RAM: {
@@ -4389,19 +4462,20 @@ static void DrawHwIcon(Gdiplus::Graphics& g, int kind, float cx, float cy, float
         AddRoundRect(dk, Gdiplus::RectF(cx - 6.6f * u, cy - 6.6f * u, 13.2f * u, 13.2f * u),
             2.2f * u);
         g.DrawPath(&pen, &dk);
-        Gdiplus::SolidBrush dot(pal.chipFg);
+        Gdiplus::SolidBrush dot(fg);
         g.FillEllipse(&dot, cx - 4.2f * u, cy - 4.2f * u, 2.6f * u, 2.6f * u);
         g.DrawLine(&pen, cx - 4.4f * u, cy + 3.6f * u, cx + 4.4f * u, cy + 3.6f * u);
         break;
     }
     case ICON_GPU: {
+        // 显卡：卡身 + 风扇 + 散热鳍片（原来那两条"腿"会被看成三脚架/相机）
         Gdiplus::GraphicsPath gd;
-        AddRoundRect(gd, Gdiplus::RectF(cx - 7.2f * u, cy - 5.0f * u, 14.4f * u, 10.0f * u),
+        AddRoundRect(gd, Gdiplus::RectF(cx - 7.4f * u, cy - 4.8f * u, 14.8f * u, 9.6f * u),
             2.0f * u);
         g.DrawPath(&pen, &gd);
-        g.DrawEllipse(&pen, cx - 2.0f * u, cy - 2.6f * u, 5.2f * u, 5.2f * u);
-        g.DrawLine(&pen, cx - 4.6f * u, cy + 6.4f * u, cx - 4.6f * u, cy + 8.0f * u);
-        g.DrawLine(&pen, cx + 3.4f * u, cy + 6.4f * u, cx + 3.4f * u, cy + 8.0f * u);
+        g.DrawEllipse(&pen, cx - 6.0f * u, cy - 2.4f * u, 4.8f * u, 4.8f * u);
+        g.DrawLine(&pen, cx + 0.4f * u, cy - 1.8f * u, cx + 5.6f * u, cy - 1.8f * u);
+        g.DrawLine(&pen, cx + 0.4f * u, cy + 1.8f * u, cx + 5.6f * u, cy + 1.8f * u);
         break;
     }
     default: {   // ICON_NET: Wi-Fi
@@ -4409,11 +4483,20 @@ static void DrawHwIcon(Gdiplus::Graphics& g, int kind, float cx, float cy, float
             float rr = (2.6f + i * 2.6f) * u;
             g.DrawArc(&pen, cx - rr, cy + 3.0f * u - rr, rr * 2, rr * 2, 200.0f, 140.0f);
         }
-        Gdiplus::SolidBrush dot(pal.chipFg);
+        Gdiplus::SolidBrush dot(fg);
         g.FillEllipse(&dot, cx - 1.3f * u, cy + 2.2f * u, 2.6f * u, 2.6f * u);
         break;
     }
     }
+}
+
+// 圆形底 + 字形：设置页的行图标用这个。
+static void DrawHwIcon(Gdiplus::Graphics& g, int kind, float cx, float cy, float r,
+    const Palette& pal)
+{
+    Gdiplus::SolidBrush bg(pal.chipBg);
+    g.FillEllipse(&bg, cx - r, cy - r, r * 2, r * 2);
+    DrawHwIconGlyph(g, kind, cx, cy, r, pal.chipFg);
 }
 
 static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
@@ -4421,64 +4504,75 @@ static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
 {
     if (g_rowCount <= 0) return;
 
-    const float gapBase = 16 * s;
-    const float cardW = (w - gapBase) * 0.5f;
-    const int perCol = (g_rowCount + 1) / 2;
+    // 图吧工具箱式排版：一张连续卡片里按分区排「图标 + 标题 + 标签: 值」，
+    // 分区之间用发丝线分隔。行高按内容走，再把剩余高度均摊到分区间距，
+    // 这样既不会截断长型号，也不会在底部留一大片空白。
+    const float pad = 22 * s;
+    const float chip = 34 * s;
+    const float titleH = 16.5f;
+    const float lineH = 24 * s;
+    const float gapMin = 14 * s;
+    const float textX = x + pad + chip + 14 * s;
+    const float textW = x + w - pad - textX;
 
-    // 自然高度（标题 26 + 每条明细 22 + 上下留白），再按剩余空间等比撑开，
-    // 免得 6 张卡只占上半屏、下面一大片空白。
-    auto natural = [&](int i) { return 88 * s + g_rows[i].detailCount * 22 * s; };
+    Gdiplus::RectF card(x, y, w, availH);
+    FillRound(g, card, 16 * s, pal.card);
 
-    int colOf[16] = { 0 };
-    float colH[2] = { 0, 0 };
-    for (int i = 0; i < g_rowCount && i < 16; i++) {
-        int col = (colH[0] <= colH[1]) ? 0 : 1;
-        colOf[i] = col;
-        colH[col] += natural(i) + gapBase;
-    }
-    float maxNat = 0;
-    for (int c = 0; c < 2; c++) {
-        colH[c] -= gapBase;
-        if (colH[c] > maxNat) maxNat = colH[c];
-    }
-
-    float extra = 0, gap = gapBase, offsetY = 0;
-    if (availH > maxNat + 1) {
-        float room = availH - maxNat;
-        extra = room / (float)perCol;
-        if (extra > 30 * s) extra = 30 * s;
-        room -= extra * perCol;
-        if (perCol > 1) {
-            float grow = room / (float)(perCol - 1);   // 余量并进行间距，正好铺满
-            if (grow > 26 * s) grow = 26 * s;
-            gap += grow;
-            room -= grow * (perCol - 1);
-        }
-        offsetY = room * 0.5f;
-        if (offsetY > 20 * s) offsetY = 20 * s;
-    }
-
-    const float lineH = 22 * s;
-    float cy[2] = { y + offsetY, y + offsetY };
+    float natural = 0;
     for (int i = 0; i < g_rowCount; i++) {
-        const int col = colOf[i];
-        const float cardH = natural(i) + extra;
-        Gdiplus::RectF rc(x + col * (cardW + gapBase), cy[col], cardW, cardH);
-        cy[col] += cardH + gap;
-        FillRound(g, rc, 14 * s, pal.card);
+        float h = chip;
+        float detailH = g_rows[i].detailCount * lineH;
+        if (detailH + 4 * s > h) h = detailH + 4 * s;
+        natural += h;
+    }
+    natural += gapMin * (g_rowCount - 1) + pad * 2;
 
-        // 内容整体垂直居中，撑高之后不会全堆在卡片顶部
-        const float titleH = 28 * s;
-        const float contentH = titleH + g_rows[i].detailCount * lineH;
-        const float top = rc.Y + (cardH - contentH) * 0.5f;
+    float gap = gapMin;
+    if (g_rowCount > 1 && natural < availH) {
+        gap += (availH - natural) / (float)(g_rowCount - 1);
+        if (gap > 46 * s) gap = 46 * s;
+    }
+    float cy = y + pad;
+    float blockH = 0;
+    for (int i = 0; i < g_rowCount; i++) {
+        float h = chip;
+        float detailH = g_rows[i].detailCount * lineH;
+        if (detailH + 4 * s > h) h = detailH + 4 * s;
+        blockH += h;
+    }
+    blockH += gap * (g_rowCount - 1);
+    if (blockH + pad * 2 < availH)
+        cy += (availH - pad * 2 - blockH) * 0.5f;   // 余量再居中，上下对称
 
-        DrawHwIcon(g, g_rows[i].icon, rc.X + 36 * s, top + titleH * 0.5f, 15 * s, pal);
-        SText(g, g_rows[i].title, 15, FW_NORMAL, pal.title, light,
-            rc.X + 60 * s, top, cardW - 74 * s, titleH);
-        for (int d = 0; d < g_rows[i].detailCount; d++) {
-            SText(g, g_rows[i].details[d], 13, FW_NORMAL, pal.detail, light,
-                rc.X + 60 * s, top + titleH + d * lineH, cardW - 74 * s, lineH);
+    for (int i = 0; i < g_rowCount; i++) {
+        const UiRow& row = g_rows[i];
+        const float detailH = row.detailCount * lineH;
+        const float rowH = (detailH + 4 * s > chip) ? detailH + 4 * s : chip;
+
+        if (i > 0) {
+            Gdiplus::Pen hair(pal.divider, 1.0f);
+            g.DrawLine(&hair, textX, cy - gap * 0.5f, x + w - pad, cy - gap * 0.5f);
         }
+
+        // 分区图标：和面板同款，圆角方块底
+        Gdiplus::RectF box(x + pad, cy + (rowH - chip) * 0.5f, chip, chip);
+        Gdiplus::GraphicsPath bp;
+        AddRoundRect(bp, box, chip * 0.3f);
+        Gdiplus::SolidBrush chipBrush(pal.chipBg);
+        g.FillPath(&chipBrush, &bp);
+        DrawHwIconGlyph(g, row.icon, box.X + chip * 0.5f, box.Y + chip * 0.5f,
+            chip * 0.33f, pal.chipFg);
+
+        float tx = textX;
+        float ty = cy + 2 * s;
+        SText(g, row.title, titleH, FW_NORMAL, pal.title, light, tx, ty, textW, 26 * s);
+        ty += 26 * s;
+        for (int d = 0; d < row.detailCount; d++) {
+            SText(g, row.details[d], 13.5f, FW_NORMAL, pal.detail, light,
+                tx, ty, textW, lineH);
+            ty += lineH;
+        }
+        cy += rowH + gap;
     }
 }
 
