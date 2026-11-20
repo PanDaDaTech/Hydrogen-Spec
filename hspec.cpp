@@ -3385,6 +3385,7 @@ static void RemoveTrayIcon(void)
 }
 
 static void OpenSettings(void);
+static void OpenSettingsPage(int page);
 
 static void ShowTrayMenu(HWND hwnd)
 {
@@ -3413,7 +3414,8 @@ static void ShowTrayMenu(HWND hwnd)
     } else if (cmd == 2) {
         DestroyWindow(hwnd);
     } else if (cmd == 3) {
-        OpenSettings();
+        // 右键菜单的「设置…」直接落到二级设置页，而不是主界面
+        OpenSettingsPage(0);
     }
 }
 
@@ -3477,13 +3479,13 @@ static void SettingsLayoutFor(HMONITOR mon, UINT dpi)
         double availW = (double)(mi.rcWork.right - mi.rcWork.left) - 24.0;
         double availH = (double)(mi.rcWork.bottom - mi.rcWork.top) - 24.0;
         if (availW > 1.0 && 1024.0 * s > availW) s = availW / 1024.0;
-        if (availH > 1.0 && 720.0 * s > availH) s = availH / 720.0;
+        if (availH > 1.0 && 760.0 * s > availH) s = availH / 760.0;
     }
     if (s < 0.5) s = 0.5;
     s *= g_dumpZoom;
     g_setScale = s;
     g_setW = (int)(1024.0 * s + 0.5);
-    g_setH = (int)(720.0 * s + 0.5);
+    g_setH = (int)(760.0 * s + 0.5);
 }
 static int g_setPage = 0;       // 0 look, 1 content, 2 about（设置内的分页）
 static int g_setMode = 0;       // 0 主界面（硬件显示/系统信息），1 设置（二级）
@@ -4005,29 +4007,66 @@ static void DrawTextButton(Gdiplus::Graphics& g, const Gdiplus::RectF& rc,
     HitAdd((int)rc.X, (int)rc.Y, (int)rc.Width, (int)rc.Height, act);
 }
 
+// 小方块箭头按钮（显示位置用）：描边 + 居中三角，和 DrawTextButton 同一套观感。
+static void DrawArrowButton(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int dir,
+    const Palette& pal, bool hot, int act)
+{
+    double s = SettingsScale();
+    if (hot) FillRound(g, rc, 8 * s, pal.itemBg);
+    Gdiplus::Pen border(hot ? pal.primary : pal.divider, 1.2f * (float)s);
+    Gdiplus::GraphicsPath rp;
+    AddRoundRect(rp, rc, 8 * s);
+    g.DrawPath(&border, &rp);
+
+    const float cx = rc.X + rc.Width * 0.5f, cy = rc.Y + rc.Height * 0.5f;
+    const float t = 3.6f * (float)s, b = 2.0f * (float)s;
+    Gdiplus::PointF pts[3];
+    if (dir == 0) {          // up
+        pts[0] = Gdiplus::PointF(cx, cy - t);
+        pts[1] = Gdiplus::PointF(cx - t, cy + b);
+        pts[2] = Gdiplus::PointF(cx + t, cy + b);
+    } else if (dir == 1) {   // down
+        pts[0] = Gdiplus::PointF(cx, cy + t);
+        pts[1] = Gdiplus::PointF(cx - t, cy - b);
+        pts[2] = Gdiplus::PointF(cx + t, cy - b);
+    } else if (dir == 2) {   // left
+        pts[0] = Gdiplus::PointF(cx - t, cy);
+        pts[1] = Gdiplus::PointF(cx + b, cy - t);
+        pts[2] = Gdiplus::PointF(cx + b, cy + t);
+    } else {                 // right
+        pts[0] = Gdiplus::PointF(cx + t, cy);
+        pts[1] = Gdiplus::PointF(cx - b, cy - t);
+        pts[2] = Gdiplus::PointF(cx - b, cy + t);
+    }
+    Gdiplus::SolidBrush fg(hot ? pal.primary : pal.title);
+    g.FillPolygon(&fg, pts, 3);
+    HitAdd((int)rc.X, (int)rc.Y, (int)rc.Width, (int)rc.Height, act);
+}
+
 static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float x, float y, float w, float s)
 {
-    const float pad = 20 * s;
+    const float pad = 18 * s;
+    const float gap = 14 * s;
+    const float inner = w - pad * 2;
     Gdiplus::Color sub = pal.detail;
 
-    // --- 主题 ---
+    // ---------------- 1. 主题 ----------------
     const wchar_t* names[3] = { L"纯文字", L"卡片", L"分离卡片" };
-    float gap = 14 * s;
-    float tileW = (w - 40 * s - 2 * gap) / 3.0f;
+    float tileW = (inner - 2 * gap) / 3.0f;
     float thumbH = tileW * 84.0f / 161.0f;
-    float cardH1 = pad + 26 * s + 30 * s + thumbH + 8 * s + 24 * s + pad;
+    float cardH1 = pad + 26 * s + 20 * s + 6 * s + thumbH + 6 * s + 22 * s + pad;
     Gdiplus::RectF cardC1(x, y, w, cardH1);
     FillRound(g, cardC1, 14 * s, pal.card);
-    float cy = y + pad;
-    SText(g, L"主题", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy, w - 40 * s, 24 * s);
-    cy += 26 * s;
+
+    SText(g, L"主题", 18, FW_NORMAL, pal.title, light, x + pad, y + pad, inner, 24 * s);
     SText(g, L"同一个信息模型，三种渲染层", 14, FW_NORMAL, sub, light,
-        x + 20 * s, cy, w - 40 * s, 20 * s);
-    cy += 30 * s;
+        x + pad, y + pad + 26 * s, inner, 20 * s);
+
+    float ty = y + pad + 52 * s;
     for (int i = 0; i < 3; i++) {
-        float tx = x + 20 * s + i * (tileW + gap);
-        Gdiplus::RectF thumb(tx, cy, tileW, thumbH);
+        float tx = x + pad + i * (tileW + gap);
+        Gdiplus::RectF thumb(tx, ty, tileW, thumbH);
         DrawThemeThumb(g, thumb, i, pal, s);
         if (g_cfg.theme == i) {
             Gdiplus::Pen ring(pal.primary, 2.2f * s);
@@ -4038,65 +4077,81 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
         }
         Gdiplus::Color capColor = (g_cfg.theme == i) ? pal.itemFg : sub;
         SText(g, names[i], 14, FW_NORMAL, capColor, light,
-            tx, cy + thumbH + 8 * s, tileW - 22 * s, 22 * s);
-        // radio dot
+            tx, thumb.GetBottom() + 6 * s, tileW - 24 * s, 22 * s);
+
         float dotR = 6.5f * s;
-        float dx = tx + tileW - dotR * 2, dy = cy + thumbH + 8 * s + (22 * s - dotR * 2) * 0.5f;
+        float dx = tx + tileW - dotR * 2, dy = thumb.GetBottom() + 6 * s + (22 * s - dotR * 2) * 0.5f;
         Gdiplus::Pen dotPen((g_cfg.theme == i) ? pal.primary : pal.chipBg, 1.8f * s);
         g.DrawEllipse(&dotPen, dx, dy, dotR * 2, dotR * 2);
         if (g_cfg.theme == i) {
             Gdiplus::SolidBrush dotB(pal.primary);
             g.FillEllipse(&dotB, dx + 3.5f * s, dy + 3.5f * s, dotR * 2 - 7 * s, dotR * 2 - 7 * s);
         }
-        HitAdd((int)tx, (int)thumb.Y, (int)tileW, (int)(thumb.Height + 32 * s), ACT_THEME + i);
+        HitAdd((int)tx, (int)ty, (int)tileW, (int)(thumbH + 30 * s), ACT_THEME + i);
     }
 
-    // --- 主色 ---
-    float y2 = cardC1.GetBottom() + 14 * s;
-    Gdiplus::RectF cardC2(x, y2, w, 172 * s);
+    // ---------------- 2. 主题色（明暗模式 + 主色） ----------------
+    float y2 = cardC1.GetBottom() + 16 * s;
+    Gdiplus::RectF cardC2(x, y2, w, 192 * s);
     FillRound(g, cardC2, 14 * s, pal.card);
     float cy2 = y2 + pad;
-    SText(g, L"主色", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy2, w - 40 * s, 24 * s);
-    cy2 += 28 * s;
+    SText(g, L"主题色", 18, FW_NORMAL, pal.title, light, x + pad, cy2, inner, 24 * s);
+    cy2 += 26 * s;
 
-    SText(g, L"跟随壁纸取色", 15, FW_NORMAL, pal.title, light, x + 20 * s, cy2,
-        w - 140 * s, 22 * s);
+    // 明暗模式：跟随系统 / 浅色 / 深色
+    {
+        const wchar_t* modes[3] = { L"跟随系统", L"浅色", L"深色" };
+        const float segW = 216 * s, segH = 30 * s;
+        SText(g, L"明暗模式", 15, FW_NORMAL, pal.title, light, x + pad, cy2,
+            inner - segW - 12 * s, segH);
+        Gdiplus::RectF seg(x + w - pad - segW, cy2, segW, segH);
+        DrawSegmented(g, seg, modes, 3, ClampInt(g_cfg.lightMode, 0, 2), pal, light, ACT_LIGHT);
+    }
+    cy2 += 38 * s;
+
+    // 跟随壁纸取色
+    SText(g, L"跟随壁纸取色", 15, FW_NORMAL, pal.title, light, x + pad, cy2,
+        inner - 60 * s, 22 * s);
     SText(g, L"从壁纸采样主色，换算成 oklch 的 hue", 13.5f, FW_NORMAL, sub, light,
-        x + 20 * s, cy2 + 22 * s, w - 140 * s, 18 * s);
-    Gdiplus::RectF sw(x + w - 20 * s - 44 * s, cy2 + 2 * s, 44 * s, 24 * s);
-    DrawSwitch(g, sw, g_cfg.hueFollow != 0, pal);
-    HitAdd((int)sw.X, (int)sw.Y, (int)sw.Width, (int)sw.Height, ACT_HUE_FOLLOW);
+        x + pad, cy2 + 22 * s, inner - 60 * s, 18 * s);
+    {
+        Gdiplus::RectF sw(x + w - pad - 44 * s, cy2 + 2 * s, 44 * s, 24 * s);
+        DrawSwitch(g, sw, g_cfg.hueFollow != 0, pal);
+        HitAdd((int)sw.X, (int)sw.Y, (int)sw.Width, (int)sw.Height, ACT_HUE_FOLLOW);
+    }
+    cy2 += 46 * s;
 
-    float hueY = cy2 + 52 * s;
-    Gdiplus::RectF hue(x + 20 * s, hueY, w - 40 * s, 22 * s);
-    DrawHueStrip(g, hue, (float)HueDeg(), pal);
-    g_hueTrack = RECT{ (LONG)hue.X, (LONG)hue.Y, (LONG)hue.GetRight(), (LONG)hue.GetBottom() };
-    HitAdd((int)hue.X - 4, (int)hue.Y - 6, (int)hue.Width + 8, (int)hue.Height + 12, ACT_HUE_STRIP);
+    {
+        Gdiplus::RectF hue(x + pad, cy2, inner, 22 * s);
+        DrawHueStrip(g, hue, (float)HueDeg(), pal);
+        g_hueTrack = RECT{ (LONG)hue.X, (LONG)hue.Y, (LONG)hue.GetRight(), (LONG)hue.GetBottom() };
+        HitAdd((int)hue.X - 4, (int)hue.Y - 6, (int)hue.Width + 8, (int)hue.Height + 12, ACT_HUE_STRIP);
+    }
+    cy2 += 28 * s;
 
     wchar_t hueText[64];
     WPrintf(hueText, 64, L"Hue %d · %s", HueDeg(),
         g_cfg.hueFollow ? L"取自壁纸" : L"手动");
-    SText(g, hueText, 13.5f, FW_NORMAL, sub, light, x + 20 * s, hueY + 30 * s,
-        w - 120 * s, 18 * s);
+    SText(g, hueText, 13.5f, FW_NORMAL, sub, light, x + pad, cy2, inner, 18 * s);
 
-    // --- 面板 ---
-    float y3 = cardC2.GetBottom() + 14 * s;
-    Gdiplus::RectF cardC3(x, y3, w, 150 * s);
+    // ---------------- 3. 面板（不透明度 / 圆角 / 显示位置） ----------------
+    float y3 = cardC2.GetBottom() + 16 * s;
+    Gdiplus::RectF cardC3(x, y3, w, 162 * s);   // 18 pad + 30 标题 + 68 行 + 28 行 + 18 pad
     FillRound(g, cardC3, 14 * s, pal.card);
     float cy3 = y3 + pad;
-    SText(g, L"面板", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy3, w - 40 * s, 24 * s);
-    cy3 += 32 * s;
+    SText(g, L"面板", 18, FW_NORMAL, pal.title, light, x + pad, cy3, inner, 24 * s);
+    cy3 += 30 * s;
 
     struct { const wchar_t* name; int value; int act; int minV; int maxV; const wchar_t* unit; } rows[2] = {
         { L"卡片不透明度", g_cfg.opacity, ACT_OPACITY, 40, 100, L"%" },
         { L"圆角", g_cfg.radius, ACT_RADIUS, 0, 24, L"px" },
     };
+    const float labelW = 110 * s;
     for (int i = 0; i < 2; i++) {
-        float ry = cy3 + i * 38 * s;
-        SText(g, rows[i].name, 15, FW_NORMAL, pal.title, light, x + 20 * s, ry,
-            150 * s, 24 * s);
-        Gdiplus::RectF track(x + 20 * s + 150 * s, ry + 8 * s,
-            w - 40 * s - 150 * s - 64 * s, 9 * s);
+        float ry = cy3 + i * 34 * s;
+        SText(g, rows[i].name, 15, FW_NORMAL, pal.title, light, x + pad, ry, labelW, 24 * s);
+        Gdiplus::RectF track(x + pad + labelW, ry + 8 * s,
+            inner - labelW - 64 * s, 9 * s);
         float t = (float)(rows[i].value - rows[i].minV) / (float)(rows[i].maxV - rows[i].minV);
         DrawSlider(g, track, t, pal, light);
         wchar_t val[32];
@@ -4107,10 +4162,32 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
         *target = RECT{ (LONG)track.X, (LONG)track.Y, (LONG)track.GetRight(), (LONG)track.GetBottom() };
         HitAdd((int)track.X - 6, (int)ry, (int)track.Width + 12, (int)(26 * s), rows[i].act);
     }
+
+    // 显示位置：右对齐的一组按钮（↑ ↓ ← → + 复位）
+    {
+        float ry = cy3 + 68 * s;
+        SText(g, L"显示位置", 15, FW_NORMAL, pal.title, light, x + pad, ry, labelW, 28 * s);
+
+        const float btnW = 30 * s, btnH = 28 * s, bGap = 5 * s, rstW = 54 * s;
+        float right = x + w - pad;
+        Gdiplus::RectF rst(right - rstW, ry, rstW, btnH);
+        DrawTextButton(g, rst, L"复位", pal, light, g_setHot == ACT_POS + 4, ACT_POS + 4);
+
+        float bx = rst.X - bGap - 4 * (btnW + bGap) + bGap;
+        for (int i = 0; i < 4; i++) {
+            Gdiplus::RectF b(bx + i * (btnW + bGap), ry, btnW, btnH);
+            DrawArrowButton(g, b, i, pal, g_setHot == ACT_POS + i, ACT_POS + i);
+        }
+
+        wchar_t pos[48];
+        WPrintf(pos, 48, L"横向 %+d · 纵向 %+d", (int)(g_cfg.posDx), (int)(g_cfg.posDy));
+        SText(g, pos, 13.5f, FW_NORMAL, sub, light, x + pad + labelW, ry,
+            bx - (x + pad + labelW) - 10 * s, 28 * s);
+    }
 }
 
 static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
-    float x, float y, float w, float s)
+    float x, float y, float w, float s, float availH)
 {
     const wchar_t* names[TOGGLE_COUNT] = {
         L"处理器", L"主板与固件", L"内存", L"硬盘", L"显卡", L"网卡" };
@@ -4122,19 +4199,31 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
         L"型号（PE 下 PCI ID 兜底）",
         L"类型 / MAC / IP / 速率 / SSID / 网关" };
 
-    const float rowH = 84 * s;
-    Gdiplus::RectF card(x, y, w, TOGGLE_COUNT * rowH + 24 * s);
+    // 行高在 84~104dp 之间自适应，正好铺满内容区，避免底部大片空白
+    float rowH = (availH - 24 * s) / (float)TOGGLE_COUNT;
+    if (rowH < 84 * s) rowH = 84 * s;
+    if (rowH > 104 * s) rowH = 104 * s;
+
+    const float cardH = TOGGLE_COUNT * rowH + 24 * s;
+    float oy = y;
+    if (cardH < availH - 1) {
+        float off = (availH - cardH) * 0.5f;
+        if (off > 40 * s) off = 40 * s;
+        oy += off;
+    }
+    Gdiplus::RectF card(x, oy, w, cardH);
     FillRound(g, card, 14 * s, pal.card);
 
     for (int i = 0; i < TOGGLE_COUNT; i++) {
-        float ry = y + 12 * s + i * rowH;
+        float ry = oy + 12 * s + i * rowH;
+        const float c = ry + rowH * 0.5f;   // 每行内容垂直居中
         if (i > 0) {
             Gdiplus::Pen line(pal.divider, 1.0f);
-            g.DrawLine(&line, x + 20 * s, ry - 8 * s, card.GetRight() - 20 * s, ry - 8 * s);
+            g.DrawLine(&line, x + 20 * s, ry - 2 * s, card.GetRight() - 20 * s, ry - 2 * s);
         }
 
         // 84x48 preview of what the panel row will look like.
-        Gdiplus::RectF prev(x + 20 * s, ry + 18 * s, 84 * s, 48 * s);
+        Gdiplus::RectF prev(x + 20 * s, c - 24 * s, 84 * s, 48 * s);
         FillRound(g, prev, 9 * s, pal.chipBg);
         Gdiplus::Pen glyphPen(pal.chipFg, 1.4f);
         glyphPen.SetLineJoin(Gdiplus::LineJoinRound);
@@ -4146,11 +4235,11 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 33 * s, 24 * s, 3 * s), 1.5f * s, pal.detail);
 
         SText(g, names[i], 16, FW_NORMAL, pal.title, light,
-            x + 122 * s, ry + 18 * s, w - 122 * s - 84 * s, 24 * s);
+            x + 122 * s, c - 24 * s, w - 122 * s - 84 * s, 24 * s);
         SText(g, metas[i], 13.5f, FW_NORMAL, pal.detail, light,
-            x + 122 * s, ry + 46 * s, w - 122 * s - 84 * s, 20 * s);
+            x + 122 * s, c + 4 * s, w - 122 * s - 84 * s, 20 * s);
 
-        Gdiplus::RectF sw(card.GetRight() - 20 * s - 44 * s, ry + 30 * s, 44 * s, 24 * s);
+        Gdiplus::RectF sw(card.GetRight() - 20 * s - 44 * s, c - 12 * s, 44 * s, 24 * s);
         DrawSwitch(g, sw, ToggleValue(i) != 0, pal);
         HitAdd((int)(x + 10 * s), (int)(ry + 4 * s), (int)(w - 20 * s), (int)(rowH - 8 * s),
             ACT_TOGGLE + i);
@@ -4158,9 +4247,17 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
 }
 
 static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
-    float x, float y, float w, float s)
+    float x, float y, float w, float s, float availH)
 {
     float cx = x + w * 0.5f;
+
+    // 关于页内容高度固定，整体在内容区里垂直居中
+    {
+        const float blockH = 506 * s;
+        float off = (availH - blockH) * 0.5f;
+        if (off < 0) off = 0;
+        y += off;
+    }
 
     // App icon on a plate; the icon is a black outline, so invert it on dark.
     Gdiplus::RectF plate(cx - 38 * s, y + 6 * s, 76 * s, 76 * s);
@@ -4320,28 +4417,67 @@ static void DrawHwIcon(Gdiplus::Graphics& g, int kind, float cx, float cy, float
 }
 
 static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
-    float x, float y, float w, float s)
+    float x, float y, float w, float s, float availH)
 {
     if (g_rowCount <= 0) return;
 
-    const float gap = 14 * s;
-    const float cardW = (w - gap) * 0.5f;
-    float colY[2] = { y, y };
+    const float gapBase = 16 * s;
+    const float cardW = (w - gapBase) * 0.5f;
+    const int perCol = (g_rowCount + 1) / 2;
 
+    // 自然高度（标题 26 + 每条明细 22 + 上下留白），再按剩余空间等比撑开，
+    // 免得 6 张卡只占上半屏、下面一大片空白。
+    auto natural = [&](int i) { return 88 * s + g_rows[i].detailCount * 22 * s; };
+
+    int colOf[16] = { 0 };
+    float colH[2] = { 0, 0 };
+    for (int i = 0; i < g_rowCount && i < 16; i++) {
+        int col = (colH[0] <= colH[1]) ? 0 : 1;
+        colOf[i] = col;
+        colH[col] += natural(i) + gapBase;
+    }
+    float maxNat = 0;
+    for (int c = 0; c < 2; c++) {
+        colH[c] -= gapBase;
+        if (colH[c] > maxNat) maxNat = colH[c];
+    }
+
+    float extra = 0, gap = gapBase, offsetY = 0;
+    if (availH > maxNat + 1) {
+        float room = availH - maxNat;
+        extra = room / (float)perCol;
+        if (extra > 30 * s) extra = 30 * s;
+        room -= extra * perCol;
+        if (perCol > 1) {
+            float grow = room / (float)(perCol - 1);   // 余量并进行间距，正好铺满
+            if (grow > 26 * s) grow = 26 * s;
+            gap += grow;
+            room -= grow * (perCol - 1);
+        }
+        offsetY = room * 0.5f;
+        if (offsetY > 20 * s) offsetY = 20 * s;
+    }
+
+    const float lineH = 22 * s;
+    float cy[2] = { y + offsetY, y + offsetY };
     for (int i = 0; i < g_rowCount; i++) {
-        int col = (colY[0] <= colY[1]) ? 0 : 1;
-        const float cardH = 70 * s + g_rows[i].detailCount * 19 * s;
-        Gdiplus::RectF rc(x + col * (cardW + gap), colY[col], cardW, cardH);
-        colY[col] += cardH + gap;
+        const int col = colOf[i];
+        const float cardH = natural(i) + extra;
+        Gdiplus::RectF rc(x + col * (cardW + gapBase), cy[col], cardW, cardH);
+        cy[col] += cardH + gap;
         FillRound(g, rc, 14 * s, pal.card);
 
-        DrawHwIcon(g, g_rows[i].icon, rc.X + 36 * s, rc.Y + 30 * s, 15 * s, pal);
+        // 内容整体垂直居中，撑高之后不会全堆在卡片顶部
+        const float titleH = 28 * s;
+        const float contentH = titleH + g_rows[i].detailCount * lineH;
+        const float top = rc.Y + (cardH - contentH) * 0.5f;
 
+        DrawHwIcon(g, g_rows[i].icon, rc.X + 36 * s, top + titleH * 0.5f, 15 * s, pal);
         SText(g, g_rows[i].title, 15, FW_NORMAL, pal.title, light,
-            rc.X + 60 * s, rc.Y + 16 * s, cardW - 74 * s, 26 * s);
+            rc.X + 60 * s, top, cardW - 74 * s, titleH);
         for (int d = 0; d < g_rows[i].detailCount; d++) {
             SText(g, g_rows[i].details[d], 13, FW_NORMAL, pal.detail, light,
-                rc.X + 60 * s, rc.Y + 46 * s + d * 19 * s, cardW - 74 * s, 18 * s);
+                rc.X + 60 * s, top + titleH + d * lineH, cardW - 74 * s, lineH);
         }
     }
 }
@@ -4394,19 +4530,36 @@ static void GetLocalIpText(wchar_t* out, int cch)
 }
 
 static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
-    float x, float y, float w, float s)
+    float x, float y, float w, float s, float availH)
 {
     if (!g_tiReady) {
         CollectTargetInfo(&g_ti);
         g_tiReady = true;
     }
     const TargetInfo& t = g_ti;
-    const float rowH = 23 * s;
     const float keyW = 78 * s;
     const float pad = 18 * s;
 
     // ---------------- 厂商卡 ----------------
-    const float c1h = 148 * s;
+
+    // 行高按可用高度自适应（23~30dp）：两张卡共用同一行高，
+    // 卡一 5 行、卡二 11 行，剩下的空间上下对半分，避免上紧下松。
+    const float btnH = 40 * s;
+    const float gapCard = 12 * s, gapBtn = 14 * s;
+    float rowH = (availH - gapCard - gapBtn - btnH - pad * 4) / 16.0f;
+    if (rowH < 23 * s) rowH = 23 * s;
+    if (rowH > 30 * s) rowH = 30 * s;
+
+    const float c1h = 5 * rowH + pad * 2;
+    const float c1hh = c1h;   // 兼容下方引用
+    const float c2h = 11 * rowH + pad * 2;
+    {
+        float blockH = c1hh + gapCard + c2h + gapBtn + btnH;
+        float offset = (availH - blockH) * 0.5f;
+        if (offset < 0) offset = 0;
+        if (offset > 40 * s) offset = 40 * s;
+        y += offset;
+    }
     FillRound(g, MRect(x, y, w, c1h), 16 * s, pal.card);
 
     Gdiplus::RectF slot(x + pad, y + pad, 116 * s, c1h - pad * 2);
@@ -4452,8 +4605,7 @@ static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
     }
 
     // ---------------- 两列信息卡 ----------------
-    const float c2y = y + c1h + 12 * s;
-    const float c2h = 11 * rowH + pad * 2;
+    const float c2y = y + c1h + gapCard;
     FillRound(g, MRect(x, c2y, w, c2h), 16 * s, pal.card);
 
     struct KV2 { const wchar_t* k; const wchar_t* v; };
@@ -4504,8 +4656,7 @@ static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
     }
 
     // ---------------- 按钮行 ----------------
-    const float btnY = c2y + c2h + 14 * s;
-    const float btnH = 40 * s;
+    const float btnY = c2y + c2h + gapBtn;
     const float gap = 10 * s;
     const float btnW = (w - gap * 4) / 5.0f;
     const wchar_t* labels[5] = { L"IP 地址查看", L"保存所有信息", L"打开保存目录",
@@ -4520,7 +4671,11 @@ static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
 static void SettingsDraw(Gdiplus::Graphics& g)
 {
     double s = SettingsScale();
-    Palette pal = MakePalette(g_lightText, 255);
+    // 明暗模式：浅色/深色强制，跟随则用壁纸明暗推断（和面板一致）
+    const bool darkPage = (g_cfg.lightMode == 1) ? false
+                        : (g_cfg.lightMode == 2) ? true
+                        : g_lightText;
+    Palette pal = MakePalette(darkPage, 255);
     const bool light = pal.darkCard;   // light text == dark page
 
     Gdiplus::RectF page(0, 0, (float)g_setW, (float)g_setH);
@@ -4537,13 +4692,15 @@ static void SettingsDraw(Gdiplus::Graphics& g)
         SText(g, g_setMode ? L"轻谱 · 设置" : L"轻谱", 14, FW_NORMAL, pal.detail, light,
             px + 30 * s, py, 240 * s, 30 * s);
 
-        Gdiplus::RectF close(page.GetRight() - 64 * s, py + 1 * s, 40 * s, 30 * s);
-        if (g_setHot == ACT_CLOSE) FillRound(g, close, 8 * s, pal.chipBg);
-        Gdiplus::Pen cp(pal.detail, 1.6f);
+        // 关闭按钮：沿用 HKeyBoard 标题栏的叉号规格——12 格网、叉面 10.5dp、
+        // 笔画 1.3 格（≈2.2dp）、圆头端点，视觉比细长线更"实"。
+        Gdiplus::RectF close(page.GetRight() - 62 * s, py + 1 * s, 34 * s, 30 * s);
+        if (g_setHot == ACT_CLOSE) FillRound(g, close, 6 * s, pal.chipBg);
+        Gdiplus::Pen cp(pal.detail, 2.2f * (float)s);
         cp.SetStartCap(Gdiplus::LineCapRound);
         cp.SetEndCap(Gdiplus::LineCapRound);
         float cxm = close.X + close.Width * 0.5f, cym = close.Y + close.Height * 0.5f;
-        float d5 = 6.0f * (float)s;
+        float d5 = 5.25f * (float)s;
         g.DrawLine(&cp, cxm - d5, cym - d5, cxm + d5, cym + d5);
         g.DrawLine(&cp, cxm + d5, cym - d5, cxm - d5, cym + d5);
         HitAdd((int)close.X, (int)close.Y, (int)close.Width, (int)close.Height, ACT_CLOSE);
@@ -4612,7 +4769,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
 
     // ---- content ----
     const float cxp = 240 * (float)s;
-    float cyp = 28 * (float)s;
+    float cyp = 24 * (float)s;
     const float cwp = page.Width - 240 * s - 32 * s;
 
     const wchar_t* title = L"";
@@ -4639,16 +4796,18 @@ static void SettingsDraw(Gdiplus::Graphics& g)
             cwp - 16 * s, 32 * s);
         SText(g, subtitle, 14, FW_NORMAL, pal.detail, light, cxp + 16 * s, cyp + 34 * s,
             cwp - 16 * s, 20 * s);
-        cyp += 68 * s;
+        cyp += 68 * s;               // 标题块 44 + 与内容之间的 24 间隔
     }
 
+    const float availH = (page.Height - 24 * (float)s) - cyp;   // 统一底部留白 24dp
+
     if (g_setMode == 0) {
-        if (g_mainTab == 0) PageHardware(g, pal, light, cxp, cyp, cwp, (float)s);
-        else PageSystem(g, pal, light, cxp, cyp, cwp, (float)s);
+        if (g_mainTab == 0) PageHardware(g, pal, light, cxp, cyp, cwp, (float)s, availH);
+        else PageSystem(g, pal, light, cxp, cyp, cwp, (float)s, availH);
     } else {
         if (g_setPage == 0) PageLook(g, pal, light, cxp, cyp, cwp, (float)s);
-        else if (g_setPage == 1) PageContent(g, pal, light, cxp, cyp, cwp, (float)s);
-        else PageAbout(g, pal, light, cxp, cyp + 30 * s, cwp, (float)s);
+        else if (g_setPage == 1) PageContent(g, pal, light, cxp, cyp, cwp, (float)s, availH);
+        else PageAbout(g, pal, light, cxp, cyp, cwp, (float)s, availH);
     }
 }
 
@@ -5151,6 +5310,13 @@ static void OpenSettings(void)
     ShowWindow(g_setHwnd, SW_SHOW);
     SetForegroundWindow(g_setHwnd);
     SettingsInvalidate();
+}
+
+static void OpenSettingsPage(int page)
+{
+    g_setMode = 1;                       // 二级：设置
+    g_setPage = ClampInt(page, 0, 2);    // 0 外观 / 1 显示内容 / 2 关于
+    OpenSettings();
 }
 
 
