@@ -1030,8 +1030,6 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         UiCard(g, u, card, s);
         SText(g, L"面板样式", 14.5f, FW_NORMAL, u.deepText, light, x + 18 * s,
             y + 14 * s, 200 * s, 20 * s);
-        SText(g, L"换一张底图看效果，切换立即生效", 11.5f, FW_NORMAL, u.t40, light,
-            x + 18 * s + 90 * s, y + 16 * s, 260 * s, 18 * s);
 
         float rowY = y + 46 * s;
         float pvW = 246 * s;
@@ -1071,8 +1069,6 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"主题色", 14.5f, FW_NORMAL, u.deepText, light, x + 18 * s, cy + 14 * s,
             200 * s, 20 * s);
-        SText(g, L"所有强调色都从这一个色相里推导", 11.5f, FW_NORMAL, u.t40, light,
-            x + 108 * s, cy + 16 * s, 260 * s, 18 * s);
 
         float ry = cy + 44 * s;
         SText(g, L"明暗模式", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, 120 * s, 30 * s);
@@ -1150,8 +1146,6 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"面板", 14.5f, FW_NORMAL, u.deepText, light, x + 18 * s, cy + 14 * s,
             200 * s, 20 * s);
-        SText(g, L"贴桌面那一层的透明度、圆角和位置", 11.5f, FW_NORMAL, u.t40, light,
-            x + 68 * s, cy + 16 * s, 300 * s, 18 * s);
 
         float ry = cy + 46 * s;
         const float labelW = 90 * s;
