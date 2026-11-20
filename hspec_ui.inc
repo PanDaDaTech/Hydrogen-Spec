@@ -380,6 +380,27 @@ static float UiTextW(const wchar_t* t, float dp)
     return MeasureHw(t);
 }
 
+// ICON_*（数据层）到 UiIcon（绘制层）的映射：两个枚举从 ICON_MONITOR 起错位，
+// 直接强转会把显示器画成显卡、电池画成显示器。
+static UiIcon UiIconForRow(int icon)
+{
+    switch (icon) {
+    case ICON_CPU: return UI_CPU;
+    case ICON_BOARD: return UI_BOARD;
+    case ICON_RAM: return UI_RAM;
+    case ICON_DISK: return UI_DISK;
+    case ICON_GPU: return UI_VGA;
+    case ICON_NET: return UI_NET;
+    case ICON_NPU: return UI_NPU;
+    case ICON_MONITOR: return UI_MONITOR;
+    case ICON_BATTERY: return UI_BATTERY;
+    case ICON_AUDIO: return UI_AUDIO;
+    case ICON_PLUG: return UI_PLUG;
+    case ICON_CLOCK: return UI_CLOCK;
+    default: return UI_INFO;
+    }
+}
+
 static void UiChip(Gdiplus::Graphics& g, const UiStyle& u, float x, float y,
     float box, float r, int icon, float iconSize)
 {
@@ -619,7 +640,7 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     }
 
     float hy = y + 10 * s;
-    UiChip(g, u, x, hy, chip, 9 * s, row.icon, 20 * s);
+    UiChip(g, u, x, hy, chip, 9 * s, UiIconForRow(row.icon), 20 * s);
 
     float tagW = 0;
     if (tag && tag[0]) tagW = UiTextW(tag, 11.5f) + 14 * s;
@@ -1009,50 +1030,45 @@ static void PageSysUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 static void UiPreviewPanel(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     const Gdiplus::RectF& rc, float s)
 {
+    // 模拟桌面上那张面板卡片：白/深底 + 五行真实标题 + 蓝紫渐变描边
     Gdiplus::GraphicsPath clip;
     UiRoundRectPath(clip, rc.X, rc.Y, rc.Width, rc.Height, 12 * s);
     Gdiplus::Region saved;
     g.GetClip(&saved);
     g.SetClip(&clip);
 
-    {
-        Gdiplus::LinearGradientBrush sky(Gdiplus::PointF(rc.X, rc.Y),
-            Gdiplus::PointF(rc.GetRight(), rc.GetBottom()),
-            Gdiplus::Color(255, 88, 112, 160), Gdiplus::Color(255, 58, 70, 104));
-        g.FillRectangle(&sky, rc);
-        Gdiplus::SolidBrush warm(Gdiplus::Color(110, 214, 158, 96));
-        g.FillEllipse(&warm, rc.X + rc.Width * 0.52f, rc.Y + rc.Height * 0.4f,
-            rc.Width * 0.7f, rc.Height);
-        Gdiplus::SolidBrush cool(Gdiplus::Color(80, 90, 140, 210));
-        g.FillEllipse(&cool, rc.X - rc.Width * 0.2f, rc.Y - rc.Height * 0.2f,
-            rc.Width * 0.7f, rc.Height * 0.8f);
-    }
+    FillRound(g, rc, 12 * s, UiClr(u.card, 255));
 
-    Gdiplus::RectF panel(rc.X + 10 * s, rc.Y + 10 * s, rc.Width - 20 * s,
-        rc.Height - 20 * s);
-    FillRound(g, panel, 12 * s, UiClr(u.card, 235));
-
-    float ry = panel.Y + 12 * s;
-    for (int i = 0; i < 3; i++) {
-        Gdiplus::RectF chip(panel.X + 12 * s, ry, 14 * s, 14 * s);
+    float ry = rc.Y + 9 * s;
+    const float rowH = 20 * s;
+    for (int i = 0; i < 5 && i < g_rowCount; i++) {
+        Gdiplus::RectF chip(rc.X + 10 * s, ry + 2 * s, 14 * s, 14 * s);
         FillRound(g, chip, 4 * s, u.btnRegular);
-        DrawUiIcon(g, i == 0 ? UI_CPU : (i == 1 ? UI_RAM : UI_GPU),
-            UiCX(chip), UiCY(chip), 9.5f * s, u.btnContent, 1.7f);
-        FillRound(g, MRect(chip.GetRight() + 6 * s, ry + 1 * s, 86 * s, 5 * s),
-            2.5f * s, UiClr(u.deepText, 220));
-        FillRound(g, MRect(chip.GetRight() + 6 * s, ry + 9 * s, 60 * s, 3.5f * s),
-            1.75f * s, UiClr(u.deepText, 110));
-        ry += 26 * s;
+        DrawUiIcon(g, UiIconForRow(g_rows[i].icon), UiCX(chip), UiCY(chip), 9.5f * s,
+            u.btnContent, 1.8f);
+        SText(g, g_rows[i].title, 8.6f, FW_NORMAL, u.deepText, light,
+            chip.GetRight() + 5 * s, ry, rc.Width - 34 * s, rowH,
+            DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+        ry += rowH;
     }
-
-    // 底部渐隐：暗示面板贴桌面的半透明
-    Gdiplus::RectF fade(panel.X, panel.GetBottom() - 26 * s, panel.Width, 26 * s);
-    Gdiplus::LinearGradientBrush fb(Gdiplus::PointF(fade.X, fade.Y),
-        Gdiplus::PointF(fade.X, fade.GetBottom()),
-        Gdiplus::Color(0, 255, 255, 255), Gdiplus::Color(110, 255, 255, 255));
-    g.FillRectangle(&fb, fade);
 
     g.SetClip(&saved);
+
+    // 渐变描边（蓝 -> 紫 -> 粉），暗示面板颜色跟随壁纸
+    {
+        Gdiplus::GraphicsPath border;
+        UiRoundRectPath(border, rc.X + 0.75f * s, rc.Y + 0.75f * s,
+            rc.Width - 1.5f * s, rc.Height - 1.5f * s, 12 * s);
+        Gdiplus::LinearGradientBrush lg(Gdiplus::PointF(rc.X, rc.Y),
+            Gdiplus::PointF(rc.GetRight(), rc.GetBottom()),
+            OklchColor(0.70, 0.14, 250, 255), OklchColor(0.70, 0.14, 330, 255));
+        Gdiplus::Color blend[3] = { OklchColor(0.70, 0.14, 250, 255),
+            OklchColor(0.70, 0.14, 300, 255), OklchColor(0.70, 0.14, 345, 255) };
+        Gdiplus::REAL pos[3] = { 0.0f, 0.55f, 1.0f };
+        lg.SetInterpolationColors(blend, pos, 3);
+        Gdiplus::Pen pen(&lg, 1.6f * s);
+        g.DrawPath(&pen, &border);
+    }
 }
 
 static void UiCard(Gdiplus::Graphics& g, const UiStyle& u, const Gdiplus::RectF& rc, float s)
@@ -1112,13 +1128,17 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             200 * s, 20 * s);
 
         float ry = cy + 44 * s;
-        SText(g, L"明暗模式", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, 120 * s, 30 * s);
+        SText(g, L"明暗模式", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, 120 * s, 20 * s);
+        SText(g, L"跟随系统时读注册表的 AppsUseLightTheme", 11.5f, FW_NORMAL, u.t40, light,
+            x + 18 * s, ry + 20 * s, 300 * s, 16 * s);
         const wchar_t* modes[3] = { L"跟随系统", L"浅色", L"深色" };
         UiSegmented(g, u, light, x + w - 18 * s - 240 * s, ry, 240 * s, 30 * s, modes, 3,
             g_cfg.lightMode, ACT_LIGHT);
 
         ry += 40 * s;
-        SText(g, L"跟随壁纸取色", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, 200 * s, 28 * s);
+        SText(g, L"跟随壁纸取色", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, 200 * s, 20 * s);
+        SText(g, L"从壁纸采样主色，换算成 oklch 的 hue", 11.5f, FW_NORMAL, u.t40, light,
+            x + 18 * s, ry + 20 * s, 300 * s, 16 * s);
         UiSwitch(g, u, Gdiplus::RectF(x + w - 18 * s - 44 * s, ry + 2 * s, 44 * s, 24 * s),
             g_cfg.hueFollow != 0, false, ACT_HUE_FOLLOW);
 
@@ -1160,7 +1180,9 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             wchar_t meta[96];
             WPrintf(meta, 96, L"Hue %d · %s", HueDeg(),
                 g_cfg.hueFollow ? L"取自壁纸" : L"手动");
-            SText(g, meta, 11.5f, FW_NORMAL, u.t40, light, x + 18 * s, ry, 260 * s, 18 * s);
+            SText(g, meta, 11.5f, FW_NORMAL, u.t40, light, x + 18 * s, ry, 130 * s, 18 * s);
+            SText(g, L"拖动或点选，整窗中性色跟着走", 11.5f, FW_NORMAL, u.t40, light,
+                x + 148 * s, ry, 260 * s, 18 * s);
         }
         {
             static const int preset[5] = { 250, 190, 160, 300, 20 };
@@ -1170,7 +1192,7 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
                 FillRound(g, sw, 4 * s, OklchColor(0.70, 0.14, preset[i], 255));
                 bool on = (!g_cfg.hueFollow && g_cfg.hue == preset[i]);
                 if (on) {
-                    Gdiplus::Pen pen(Gdiplus::Color(255, 255, 255, 255), 2.0f);
+                    Gdiplus::Pen pen(u.primary, 2.0f * s);
                     g.DrawEllipse(&pen, sw.X - 3 * s, sw.Y - 3 * s, sw.Width + 6 * s,
                         sw.Height + 6 * s);
                 }
@@ -1220,7 +1242,7 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         wchar_t buf[32];
         WPrintf(buf, 32, L"%d%%", g_cfg.opacity);
         row(L"卡片不透明度", (g_cfg.opacity - 40) / 60.0f, ACT_OPACITY, buf);
-        WPrintf(buf, 32, L"%dpx", g_cfg.radius);
+        WPrintf(buf, 32, L"%d px", g_cfg.radius);
         row(L"圆角", g_cfg.radius / 24.0f, ACT_RADIUS, buf);
 
         SText(g, L"显示位置", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, labelW, 22 * s);
@@ -1244,28 +1266,43 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         }
         ry += 34 * s;
 
-        // 位置示意图
+        // 位置示意图：蓝点是面板在桌面上的真实落点
         {
-            Gdiplus::RectF map(x + sliderX, ry, 142 * s, 56 * s);
+            Gdiplus::RectF map(x + 18 * s, ry, 142 * s, 56 * s);
             Gdiplus::Pen dash(u.line, 1.0f);
             dash.SetDashStyle(Gdiplus::DashStyleDash);
             g.DrawRectangle(&dash, map.X, map.Y, map.Width, map.Height);
 
-            static const float baseX[5] = { 16, 84, 16, 84, 50 };
-            static const float baseY[5] = { 14, 14, 86, 86, 6 };
-            int pos = 0;
-            for (int i = 0; i < 5; i++) {
-                if (g_cfg.posDx == 0 && g_cfg.posDy == 0 && i == 0) pos = i;
+            float px = 50, py = 50;
+            {
+                RECT wr = { 0 };
+                if (g_hwnd && GetWindowRect(g_hwnd, &wr)) {
+                    HMONITOR mon = MonitorFromWindow(g_hwnd, MONITOR_DEFAULTTONEAREST);
+                    MONITORINFO mi = { sizeof(mi) };
+                    if (GetMonitorInfoW(mon, &mi)) {
+                        float monW = (float)(mi.rcMonitor.right - mi.rcMonitor.left);
+                        float monH = (float)(mi.rcMonitor.bottom - mi.rcMonitor.top);
+                        if (monW > 0 && monH > 0) {
+                            px = ((wr.left + wr.right) * 0.5f - mi.rcMonitor.left) / monW * 100.0f;
+                            py = ((wr.top + wr.bottom) * 0.5f - mi.rcMonitor.top) / monH * 100.0f;
+                        }
+                    }
+                }
             }
-            float px = baseX[pos] + g_cfg.posDx / 6.0f;
-            float py = baseY[pos] + g_cfg.posDy / 5.0f;
-            if (px < 6) px = 6;
-            if (px > 94) px = 94;
-            if (py < 8) py = 8;
-            if (py > 92) py = 92;
+            if (px < 5) px = 5;
+            if (px > 95) px = 95;
+            if (py < 6) py = 6;
+            if (py > 94) py = 94;
             Gdiplus::RectF dot(map.X + map.Width * px / 100.0f - 13 * s,
                 map.Y + map.Height * py / 100.0f - 3.5f * s, 26 * s, 7 * s);
             FillRound(g, dot, 3.5f * s, u.primary);
+
+            SText(g, L"蓝点是面板落点，箭头每次移动 8 dp，复位回到设定的角；",
+                11.5f, FW_NORMAL, u.t40, light, map.GetRight() + 16 * s, map.Y + 6 * s,
+                w - (map.Width + 52 * s), 18 * s);
+            SText(g, L"换分辨率后按比例还原，不会跑到屏幕外。",
+                11.5f, FW_NORMAL, u.t40, light, map.GetRight() + 16 * s, map.Y + 26 * s,
+                w - (map.Width + 52 * s), 18 * s);
         }
         cy += h + 12 * s;
     }
@@ -1437,7 +1474,10 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         if (logo && logo->GetLastStatus() == Gdiplus::Ok)
             g.DrawImage(logo, Gdiplus::RectF(cx - 37 * s, cy, 74 * s, 74 * s));
     } else {
-        DrawUiIcon(g, UI_GPU, cx, cy + 37 * s, 60 * s, u.primary);
+        // 没有位图 logo 时用品牌色块兜底
+        Gdiplus::RectF tile(cx - 37 * s, cy, 74 * s, 74 * s);
+        FillRound(g, tile, 20 * s, UiClr(u.primary, 30));
+        DrawUiIcon(g, UI_GPU, UiCX(tile), UiCY(tile), 38 * s, u.primary);
     }
     cy += 74 * s + 16 * s;
 
@@ -1517,7 +1557,15 @@ static void UiTitlebar(Gdiplus::Graphics& g, const UiStyle& u, bool light, float
     float by = (h - 32 * s) * 0.5f;
     Gdiplus::RectF close(w - 8 * s - 38 * s, by, 38 * s, 32 * s);
     Gdiplus::RectF hide(close.X - 40 * s, by, 38 * s, 32 * s);
+    Gdiplus::RectF mini(hide.X - 40 * s, by, 38 * s, 32 * s);
 
+    {
+        bool hot = (g_setHot == ACT_MINIMIZE);
+        if (hot) FillRound(g, mini, 8 * s, u.btnRegular);
+        DrawUiIcon(g, UI_MIN, UiCX(mini), UiCY(mini), 15 * s,
+            hot ? u.deepText : u.t60);
+        UiHit(mini.X, mini.Y, mini.Width, mini.Height, ACT_MINIMIZE);
+    }
     {
         bool hot = (g_setHot == ACT_WIN_HIDE);
         if (hot) FillRound(g, hide, 8 * s, u.btnRegular);
