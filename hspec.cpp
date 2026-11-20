@@ -1495,7 +1495,7 @@ struct Config
     int hue;
     int opacity;
     int radius;
-    int showCpu, showBoard, showMem, showDisk, showGpu, showNet;
+    int showCpu, showBoard, showMem, showDisk, showGpu, showNpu, showNet;
     int lightMode;   // 0 auto, 1 light, 2 dark
     int posDx, posDy; // panel offset in dp
 };
@@ -1583,6 +1583,7 @@ static void LoadConfig(void)
     g_cfg.showMem = ClampInt((int)GetPrivateProfileIntW(L"panel", L"mem", g_cfg.showMem, g_iniPath), 0, 1);
     g_cfg.showDisk = ClampInt((int)GetPrivateProfileIntW(L"panel", L"disk", g_cfg.showDisk, g_iniPath), 0, 1);
     g_cfg.showGpu = ClampInt((int)GetPrivateProfileIntW(L"panel", L"gpu", g_cfg.showGpu, g_iniPath), 0, 1);
+    g_cfg.showNpu = ClampInt((int)GetPrivateProfileIntW(L"panel", L"npu", g_cfg.showNpu, g_iniPath), 0, 1);
     g_cfg.showNet = ClampInt((int)GetPrivateProfileIntW(L"panel", L"net", g_cfg.showNet, g_iniPath), 0, 1);
     g_cfg.lightMode = ClampInt((int)GetPrivateProfileIntW(L"panel", L"lightMode", g_cfg.lightMode, g_iniPath), 0, 2);
     g_cfg.posDx = ClampInt((int)GetPrivateProfileIntW(L"panel", L"posDx", g_cfg.posDx, g_iniPath), -400, 400);
@@ -1605,6 +1606,7 @@ static void SaveConfig(void)
         { L"mem", g_cfg.showMem },
         { L"disk", g_cfg.showDisk },
         { L"gpu", g_cfg.showGpu },
+        { L"npu", g_cfg.showNpu },
         { L"net", g_cfg.showNet },
         { L"lightMode", g_cfg.lightMode },
         { L"posDx", g_cfg.posDx },
@@ -1716,7 +1718,7 @@ static Palette MakePalette(bool darkCard, int cardAlpha)
 // UI model
 // ===========================================================================
 
-enum IconKind { ICON_CPU = 0, ICON_BOARD, ICON_RAM, ICON_DISK, ICON_GPU, ICON_NET };
+enum IconKind { ICON_CPU = 0, ICON_BOARD, ICON_RAM, ICON_DISK, ICON_GPU, ICON_NET, ICON_NPU };
 
 struct UiRow
 {
@@ -1994,6 +1996,55 @@ static bool SaveTargetInfo(const wchar_t* path, const TargetInfo* t)
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// NPU（神经网络加速器）
+// Win11 24H2 起这类设备归到 ComputeAccelerator 设备类；老系统或 PE 里
+// 没有该类时枚举结果为空，直接不显示，不影响其它分区。
+// ---------------------------------------------------------------------------
+struct NpuInfo { wchar_t name[160]; wchar_t key[9]; };
+
+static const GUID kComputeAccelClass = { 0xF01A9D53, 0x3FF6, 0x48D2,
+    { 0x9F, 0x97, 0xC8, 0xA7, 0x00, 0x4B, 0xE1, 0x0C } };
+
+static int EnumNpus(NpuInfo* out, int cap)
+{
+    HDEVINFO devs = SetupDiGetClassDevsW(&kComputeAccelClass, NULL, NULL, DIGCF_PRESENT);
+    if (devs == INVALID_HANDLE_VALUE) return 0;
+
+    int n = 0;
+    SP_DEVINFO_DATA data;
+    data.cbSize = sizeof(data);
+    for (DWORD i = 0; SetupDiEnumDeviceInfo(devs, i, &data); i++) {
+        wchar_t id[512] = { 0 };
+        SetupDiGetDeviceInstanceIdW(devs, &data, id, 512, NULL);
+        wchar_t key[9] = { 0 };
+        bool hasKey = ExtractPciKey(id, key);
+
+        wchar_t name[160] = { 0 };
+        if (hasKey) LookupIdTable(g_gpuIds, g_gpuIdCount, key, name, 160);
+        if (!name[0]) GetDeviceString(devs, &data, SPDRP_FRIENDLYNAME, name, 160);
+        if (!name[0]) GetDeviceString(devs, &data, SPDRP_DEVICEDESC, name, 160);
+        SanitizeDeviceName(name, 160);
+        if (!name[0]) {
+            if (!_wcsnicmp(key, L"8086", 4)) wcsncpy_s(name, 160, L"英特尔 NPU", _TRUNCATE);
+            else if (!_wcsnicmp(key, L"1022", 4)) wcsncpy_s(name, 160, L"AMD NPU", _TRUNCATE);
+            else if (!_wcsnicmp(key, L"17CB", 4)) wcsncpy_s(name, 160, L"高通 NPU", _TRUNCATE);
+            else wcsncpy_s(name, 160, L"NPU", _TRUNCATE);
+        }
+
+        bool dup = false;
+        for (int j = 0; j < n; j++)
+            if (!wcscmp(out[j].name, name)) { dup = true; break; }
+        if (dup) continue;
+
+        wcsncpy_s(out[n].name, 160, name, _TRUNCATE);
+        wcsncpy_s(out[n].key, 9, key, _TRUNCATE);
+        if (++n >= cap) break;
+    }
+    SetupDiDestroyDeviceInfoList(devs);
+    return n;
+}
+
 static void BuildModel(void)
 {
     g_rowCount = 0;
@@ -2209,6 +2260,24 @@ static void BuildModel(void)
             else
                 WPrintf(d, 320, L"%d. %s", i + 1, gpus[order[i]].name);
             ModelAddDetail(r, d);
+        }
+    }
+
+    // ---- NPU（有设备才出现）----
+    g_skipSection = !g_cfg.showNpu;
+    if (!g_skipSection) {
+        NpuInfo npus[2];
+        int nn = EnumNpus(npus, 2);
+        if (nn <= 0) {
+            r = ModelAddRow(ICON_NPU, L"NPU: 未检测到");
+            ModelAddDetail(r, L"当前系统没有可用的神经网络加速器");
+        } else {
+            for (int i = 0; i < nn; i++) {
+                wchar_t t[200];
+                WPrintf(t, 200, L"NPU: %s", npus[i].name);
+                r = ModelAddRow(ICON_NPU, t);
+                if (i == 0) ModelAddDetail(r, L"类型: 神经网络加速器");
+            }
         }
     }
 
@@ -3593,7 +3662,7 @@ enum
     ACT_SETNAV = 90,     // 设置内的分页 + index
 };
 
-enum { TOGGLE_CPU = 0, TOGGLE_BOARD, TOGGLE_MEM, TOGGLE_DISK, TOGGLE_GPU, TOGGLE_NET, TOGGLE_COUNT };
+enum { TOGGLE_CPU = 0, TOGGLE_BOARD, TOGGLE_MEM, TOGGLE_DISK, TOGGLE_GPU, TOGGLE_NPU, TOGGLE_NET, TOGGLE_COUNT };
 
 struct HitRect { RECT rc; int act; };
 static HitRect g_hits[48];
@@ -3626,6 +3695,7 @@ static int ToggleValue(int index)
     case TOGGLE_MEM: return g_cfg.showMem;
     case TOGGLE_DISK: return g_cfg.showDisk;
     case TOGGLE_GPU: return g_cfg.showGpu;
+    case TOGGLE_NPU: return g_cfg.showNpu;
     case TOGGLE_NET: return g_cfg.showNet;
     }
     return 0;
@@ -3639,6 +3709,7 @@ static void ToggleFlip(int index)
     case TOGGLE_MEM: g_cfg.showMem = !g_cfg.showMem; break;
     case TOGGLE_DISK: g_cfg.showDisk = !g_cfg.showDisk; break;
     case TOGGLE_GPU: g_cfg.showGpu = !g_cfg.showGpu; break;
+    case TOGGLE_NPU: g_cfg.showNpu = !g_cfg.showNpu; break;
     case TOGGLE_NET: g_cfg.showNet = !g_cfg.showNet; break;
     default: return;
     }
@@ -4263,13 +4334,14 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float x, float y, float w, float s, float availH)
 {
     const wchar_t* names[TOGGLE_COUNT] = {
-        L"处理器", L"主板与固件", L"内存", L"硬盘", L"显卡", L"网卡" };
+        L"处理器", L"主板与固件", L"内存", L"硬盘", L"显卡", L"NPU", L"网卡" };
     const wchar_t* metas[TOGGLE_COUNT] = {
         L"型号 / 核心 / 线程",
         L"厂商 / 固件版本 / 启动方式 / 证书",
         L"品牌 / 型号 / 容量 / 频率",
         L"型号 / 容量 / 分区格式 / 总线",
         L"型号 / 显存（当前使用的排在前面）",
+        L"神经网络加速器（处理器带 NPU 才有）",
         L"类型 / MAC / IP / 速率 / SSID / 网关" };
 
     // 行高在 84~104dp 之间自适应，正好铺满内容区，避免底部大片空白
@@ -4302,7 +4374,10 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
         glyphPen.SetLineJoin(Gdiplus::LineJoinRound);
         glyphPen.SetStartCap(Gdiplus::LineCapRound);
         glyphPen.SetEndCap(Gdiplus::LineCapRound);
-        DrawHwIconGlyph(g, i, prev.X + 20 * s, prev.Y + 24 * s, 8.6f * (float)s, pal.chipFg);
+        static const int kToggleIcon[TOGGLE_COUNT] = {
+            ICON_CPU, ICON_BOARD, ICON_RAM, ICON_DISK, ICON_GPU, ICON_NPU, ICON_NET };
+        DrawHwIconGlyph(g, kToggleIcon[i], prev.X + 20 * s, prev.Y + 24 * s,
+            8.6f * (float)s, pal.chipFg);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 15 * s, 34 * s, 4 * s), 2 * s, pal.title);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 25 * s, 30 * s, 3 * s), 1.5f * s, pal.detail);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 33 * s, 24 * s, 3 * s), 1.5f * s, pal.detail);
@@ -4478,13 +4553,27 @@ static void DrawHwIconGlyph(Gdiplus::Graphics& g, int kind, float cx, float cy, 
         g.DrawLine(&pen, cx + 0.4f * u, cy + 1.8f * u, cx + 5.6f * u, cy + 1.8f * u);
         break;
     }
-    default: {   // ICON_NET: Wi-Fi
+    case ICON_NET: {   // 网卡：Wi-Fi
         for (int i = 0; i < 3; i++) {
             float rr = (2.6f + i * 2.6f) * u;
             g.DrawArc(&pen, cx - rr, cy + 3.0f * u - rr, rr * 2, rr * 2, 200.0f, 140.0f);
         }
         Gdiplus::SolidBrush dot(fg);
         g.FillEllipse(&dot, cx - 1.3f * u, cy + 2.2f * u, 2.6f * u, 2.6f * u);
+        break;
+    }
+    default: {   // ICON_NPU：中心节点 + 三条射线（神经网络，别画成三角形警告牌）
+        const double ang[3] = { -1.5707963, 0.5235988, 2.6179939 };   // 上 / 右下 / 左下
+        Gdiplus::SolidBrush node(fg);
+        for (int i = 0; i < 3; i++) {
+            float ex = (float)cos(ang[i]) * 6.2f * u;
+            float ey = (float)sin(ang[i]) * 6.2f * u;
+            g.DrawLine(&pen, cx, cy, cx + ex, cy + ey);
+            float r = 1.9f * u;
+            g.FillEllipse(&node, cx + ex - r, cy + ey - r, r * 2, r * 2);
+        }
+        float rc = 2.4f * u;
+        g.FillEllipse(&node, cx - rc, cy - rc, rc * 2, rc * 2);
         break;
     }
     }
