@@ -2251,6 +2251,7 @@ static UINT g_taskbarCreatedMsg = 0;
 static wchar_t g_dumpPath[MAX_PATH] = { 0 };
 static wchar_t g_settingsDumpPath[MAX_PATH] = { 0 };
 static wchar_t g_infoDumpPath[MAX_PATH] = { 0 };
+static int g_dumpSetMode = 0;
 static int g_settingsDumpPage = 0;
 static bool g_openSettingsAtStart = false;
 static int g_themeOverride = -1;
@@ -3484,7 +3485,9 @@ static void SettingsLayoutFor(HMONITOR mon, UINT dpi)
     g_setW = (int)(1024.0 * s + 0.5);
     g_setH = (int)(720.0 * s + 0.5);
 }
-static int g_setPage = 0;       // 0 look, 1 content, 2 about
+static int g_setPage = 0;       // 0 look, 1 content, 2 about（设置内的分页）
+static int g_setMode = 0;       // 0 主界面（硬件显示/系统信息），1 设置（二级）
+static int g_mainTab = 0;       // 主界面分页：0 硬件显示，1 目标系统信息
 static int g_setHot = 0;
 static int g_setDrag = 0;
 static Gdiplus::Bitmap* g_logoLight = NULL;
@@ -3511,6 +3514,8 @@ enum
     ACT_SHOWIP = 72,     // IP 地址查看
     ACT_HELP = 73,       // 使用说明
     ACT_BACK = 74,       // 返回上级
+    ACT_OPEN_SET = 80,   // 进入设置（二级页面）
+    ACT_SETNAV = 90,     // 设置内的分页 + index
 };
 
 enum { TOGGLE_CPU = 0, TOGGLE_BOARD, TOGGLE_MEM, TOGGLE_DISK, TOGGLE_GPU, TOGGLE_NET, TOGGLE_COUNT };
@@ -3828,6 +3833,32 @@ static void DrawNavIcon(Gdiplus::Graphics& g, int kind, float x, float y, float 
         g.DrawPath(&pen, &scr);
         g.DrawLine(&pen, x + 12.0f * u, y + 16.8f * u, x + 12.0f * u, y + 19.4f * u);
         g.DrawLine(&pen, x + 8.6f * u, y + 19.4f * u, x + 15.4f * u, y + 19.4f * u);
+    } else if (kind == 4) {
+        // 目标系统信息：资料卡（带折角）
+        Gdiplus::GraphicsPath doc;
+        doc.AddLine(x + 5.0f * u, y + 3.6f * u, x + 13.4f * u, y + 3.6f * u);
+        doc.AddLine(x + 13.4f * u, y + 3.6f * u, x + 19.0f * u, y + 9.2f * u);
+        doc.AddLine(x + 19.0f * u, y + 9.2f * u, x + 19.0f * u, y + 20.4f * u);
+        doc.AddLine(x + 19.0f * u, y + 20.4f * u, x + 5.0f * u, y + 20.4f * u);
+        doc.CloseFigure();
+        g.DrawPath(&pen, &doc);
+        g.DrawLine(&pen, x + 13.4f * u, y + 3.6f * u, x + 13.4f * u, y + 9.2f * u);
+        g.DrawLine(&pen, x + 13.4f * u, y + 9.2f * u, x + 19.0f * u, y + 9.2f * u);
+        g.DrawLine(&pen, x + 8.2f * u, y + 13.0f * u, x + 15.8f * u, y + 13.0f * u);
+        g.DrawLine(&pen, x + 8.2f * u, y + 16.6f * u, x + 13.4f * u, y + 16.6f * u);
+    } else if (kind == 5) {
+        // 设置：齿轮
+        g.DrawEllipse(&pen, x + 5.6f * u, y + 5.6f * u, 12.8f * u, 12.8f * u);
+        Gdiplus::Pen tooth(c, 2.6f * u);
+        tooth.SetStartCap(Gdiplus::LineCapRound);
+        tooth.SetEndCap(Gdiplus::LineCapRound);
+        for (int i = 0; i < 8; i++) {
+            double a = i * 3.14159265358979323846 / 4.0;
+            float c1 = (float)cos(a), s1 = (float)sin(a);
+            g.DrawLine(&tooth, x + (12.0f + c1 * 6.4f) * u, y + (12.0f + s1 * 6.4f) * u,
+                x + (12.0f + c1 * 8.6f) * u, y + (12.0f + s1 * 8.6f) * u);
+        }
+        g.FillEllipse(&dot, x + 10.4f * u, y + 10.4f * u, 3.2f * u, 3.2f * u);
     } else {
         // 关于：信息圆
         g.DrawEllipse(&pen, x + 4.0f * u, y + 4.0f * u, 16.0f * u, 16.0f * u);
@@ -4198,6 +4229,124 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// 主界面：硬件显示（Tab 1）
+// ---------------------------------------------------------------------------
+
+// Hardware pictograms on the same 24dp grid as the rail icons.
+static void DrawHwIcon(Gdiplus::Graphics& g, int kind, float cx, float cy, float r,
+    const Palette& pal)
+{
+    Gdiplus::SolidBrush bg(pal.chipBg);
+    g.FillEllipse(&bg, cx - r, cy - r, r * 2, r * 2);
+
+    const float u = r / 10.5f;
+    Gdiplus::Pen pen(pal.chipFg, 1.7f * u);
+    pen.SetLineJoin(Gdiplus::LineJoinRound);
+    pen.SetStartCap(Gdiplus::LineCapRound);
+    pen.SetEndCap(Gdiplus::LineCapRound);
+
+    switch (kind) {
+    case ICON_CPU: {
+        Gdiplus::GraphicsPath sq;
+        AddRoundRect(sq, Gdiplus::RectF(cx - 6.2f * u, cy - 6.2f * u, 12.4f * u, 12.4f * u),
+            2.2f * u);
+        g.DrawPath(&pen, &sq);
+        Gdiplus::GraphicsPath in;
+        AddRoundRect(in, Gdiplus::RectF(cx - 2.4f * u, cy - 2.4f * u, 4.8f * u, 4.8f * u),
+            1.0f * u);
+        g.DrawPath(&pen, &in);
+        for (int i = -1; i <= 1; i += 2) {
+            g.DrawLine(&pen, cx + i * 3.2f * u, cy - 8.2f * u, cx + i * 3.2f * u, cy - 6.6f * u);
+            g.DrawLine(&pen, cx + i * 3.2f * u, cy + 6.6f * u, cx + i * 3.2f * u, cy + 8.2f * u);
+            g.DrawLine(&pen, cx - 8.2f * u, cy + i * 3.2f * u, cx - 6.6f * u, cy + i * 3.2f * u);
+            g.DrawLine(&pen, cx + 6.6f * u, cy + i * 3.2f * u, cx + 8.2f * u, cy + i * 3.2f * u);
+        }
+        break;
+    }
+    case ICON_BOARD: {
+        Gdiplus::GraphicsPath bd;
+        AddRoundRect(bd, Gdiplus::RectF(cx - 7.0f * u, cy - 6.4f * u, 14.0f * u, 12.8f * u),
+            2.0f * u);
+        g.DrawPath(&pen, &bd);
+        Gdiplus::GraphicsPath chip;
+        AddRoundRect(chip, Gdiplus::RectF(cx - 4.4f * u, cy - 3.8f * u, 4.6f * u, 4.6f * u),
+            1.0f * u);
+        g.DrawPath(&pen, &chip);
+        g.DrawLine(&pen, cx + 1.6f * u, cy - 3.4f * u, cx + 4.6f * u, cy - 3.4f * u);
+        g.DrawLine(&pen, cx + 1.6f * u, cy + 0.4f * u, cx + 4.6f * u, cy + 0.4f * u);
+        g.DrawLine(&pen, cx - 4.4f * u, cy + 3.4f * u, cx + 4.6f * u, cy + 3.4f * u);
+        break;
+    }
+    case ICON_RAM: {
+        Gdiplus::GraphicsPath st;
+        AddRoundRect(st, Gdiplus::RectF(cx - 4.2f * u, cy - 7.2f * u, 8.4f * u, 14.4f * u),
+            1.8f * u);
+        g.DrawPath(&pen, &st);
+        for (int i = -1; i <= 1; i++)
+            g.DrawLine(&pen, cx + i * 2.2f * u, cy - 3.6f * u, cx + i * 2.2f * u, cy + 3.0f * u);
+        g.DrawLine(&pen, cx - 2.8f * u, cy + 5.2f * u, cx + 2.8f * u, cy + 5.2f * u);
+        break;
+    }
+    case ICON_DISK: {
+        Gdiplus::GraphicsPath dk;
+        AddRoundRect(dk, Gdiplus::RectF(cx - 6.6f * u, cy - 6.6f * u, 13.2f * u, 13.2f * u),
+            2.2f * u);
+        g.DrawPath(&pen, &dk);
+        Gdiplus::SolidBrush dot(pal.chipFg);
+        g.FillEllipse(&dot, cx - 4.2f * u, cy - 4.2f * u, 2.6f * u, 2.6f * u);
+        g.DrawLine(&pen, cx - 4.4f * u, cy + 3.6f * u, cx + 4.4f * u, cy + 3.6f * u);
+        break;
+    }
+    case ICON_GPU: {
+        Gdiplus::GraphicsPath gd;
+        AddRoundRect(gd, Gdiplus::RectF(cx - 7.2f * u, cy - 5.0f * u, 14.4f * u, 10.0f * u),
+            2.0f * u);
+        g.DrawPath(&pen, &gd);
+        g.DrawEllipse(&pen, cx - 2.0f * u, cy - 2.6f * u, 5.2f * u, 5.2f * u);
+        g.DrawLine(&pen, cx - 4.6f * u, cy + 6.4f * u, cx - 4.6f * u, cy + 8.0f * u);
+        g.DrawLine(&pen, cx + 3.4f * u, cy + 6.4f * u, cx + 3.4f * u, cy + 8.0f * u);
+        break;
+    }
+    default: {   // ICON_NET: Wi-Fi
+        for (int i = 0; i < 3; i++) {
+            float rr = (2.6f + i * 2.6f) * u;
+            g.DrawArc(&pen, cx - rr, cy + 3.0f * u - rr, rr * 2, rr * 2, 200.0f, 140.0f);
+        }
+        Gdiplus::SolidBrush dot(pal.chipFg);
+        g.FillEllipse(&dot, cx - 1.3f * u, cy + 2.2f * u, 2.6f * u, 2.6f * u);
+        break;
+    }
+    }
+}
+
+static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
+    float x, float y, float w, float s)
+{
+    if (g_rowCount <= 0) return;
+
+    const float gap = 14 * s;
+    const float cardW = (w - gap) * 0.5f;
+    float colY[2] = { y, y };
+
+    for (int i = 0; i < g_rowCount; i++) {
+        int col = (colY[0] <= colY[1]) ? 0 : 1;
+        const float cardH = 70 * s + g_rows[i].detailCount * 19 * s;
+        Gdiplus::RectF rc(x + col * (cardW + gap), colY[col], cardW, cardH);
+        colY[col] += cardH + gap;
+        FillRound(g, rc, 14 * s, pal.card);
+
+        DrawHwIcon(g, g_rows[i].icon, rc.X + 36 * s, rc.Y + 30 * s, 15 * s, pal);
+
+        SText(g, g_rows[i].title, 15, FW_NORMAL, pal.title, light,
+            rc.X + 60 * s, rc.Y + 16 * s, cardW - 74 * s, 26 * s);
+        for (int d = 0; d < g_rows[i].detailCount; d++) {
+            SText(g, g_rows[i].details[d], 13, FW_NORMAL, pal.detail, light,
+                rc.X + 60 * s, rc.Y + 46 * s + d * 19 * s, cardW - 74 * s, 18 * s);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 系统信息页
 // ---------------------------------------------------------------------------
 
@@ -4374,9 +4523,6 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     Palette pal = MakePalette(g_lightText, 255);
     const bool light = pal.darkCard;   // light text == dark page
 
-    // Full-bleed square background: the window corners are DWM's (see
-    // OpenSettings - DWMWCP_ROUND on Win11, plain square on older systems),
-    // and the drop shadow / show animation are the system's, not ours.
     Gdiplus::RectF page(0, 0, (float)g_setW, (float)g_setH);
     g.Clear(pal.page);
 
@@ -4388,7 +4534,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
         Gdiplus::Bitmap* logo = light ? g_logoDark : g_logoLight;
         if (logo && logo->GetLastStatus() == Gdiplus::Ok)
             g.DrawImage(logo, Gdiplus::RectF(px, py + 4 * s, 22 * s, 22 * s));
-        SText(g, L"轻谱 · 设置", 14, FW_NORMAL, pal.detail, light,
+        SText(g, g_setMode ? L"轻谱 · 设置" : L"轻谱", 14, FW_NORMAL, pal.detail, light,
             px + 30 * s, py, 240 * s, 30 * s);
 
         Gdiplus::RectF close(page.GetRight() - 64 * s, py + 1 * s, 40 * s, 30 * s);
@@ -4403,19 +4549,60 @@ static void SettingsDraw(Gdiplus::Graphics& g)
         HitAdd((int)close.X, (int)close.Y, (int)close.Width, (int)close.Height, ACT_CLOSE);
     }
 
+    const float navX = 20 * (float)s;
+    const float navY = 76 * (float)s;
+
     // ---- sidebar ----
-    float navX = 20 * (float)s;
-    float navY = 76 * (float)s;
-    const wchar_t* navNames[3] = { L"外观", L"显示内容", L"关于" };
-    for (int i = 0; i < 3; i++) {
-        Gdiplus::RectF item(navX, navY + i * 54 * s, 200 * s, 46 * s);
-        bool on = (g_setPage == i);
-        if (on) FillRound(g, item, 12 * s, pal.itemBg);
-        Gdiplus::Color fg = on ? pal.itemFg : pal.detail;
-        DrawNavIcon(g, i == 2 ? 2 : i, item.X + 14 * s, item.Y + 13 * s, 20 * s, fg);
-        SText(g, navNames[i], 15, FW_NORMAL, fg, light,
-            item.X + 46 * s, item.Y, item.Width - 56 * s, item.Height);
-        HitAdd((int)item.X, (int)item.Y, (int)item.Width, (int)item.Height, ACT_NAV + i);
+    if (g_setMode == 0) {
+        // 主界面：硬件显示 / 目标系统信息
+        const wchar_t* names[2] = { L"硬件显示", L"目标系统信息" };
+        for (int i = 0; i < 2; i++) {
+            Gdiplus::RectF item(navX, navY + i * 54 * s, 200 * s, 46 * s);
+            bool on = (g_mainTab == i);
+            if (on) FillRound(g, item, 12 * s, pal.itemBg);
+            Gdiplus::Color fg = on ? pal.itemFg : pal.detail;
+            DrawNavIcon(g, i == 0 ? 3 : 4, item.X + 14 * s, item.Y + 13 * s, 20 * s, fg);
+            SText(g, names[i], 15, FW_NORMAL, fg, light,
+                item.X + 46 * s, item.Y, item.Width - 56 * s, item.Height);
+            HitAdd((int)item.X, (int)item.Y, (int)item.Width, (int)item.Height, ACT_NAV + i);
+        }
+
+        // 设置：二级页面入口
+        Gdiplus::RectF setItem(navX, page.GetBottom() - 118 * s, 200 * s, 46 * s);
+        if (g_setHot == ACT_OPEN_SET) FillRound(g, setItem, 12 * s, pal.chipBg);
+        DrawNavIcon(g, 5, setItem.X + 14 * s, setItem.Y + 13 * s, 20 * s, pal.detail);
+        SText(g, L"设置", 15, FW_NORMAL, pal.detail, light,
+            setItem.X + 46 * s, setItem.Y, setItem.Width - 56 * s, setItem.Height);
+        HitAdd((int)setItem.X, (int)setItem.Y, (int)setItem.Width, (int)setItem.Height,
+            ACT_OPEN_SET);
+    } else {
+        // 二级：返回 + 设置分页
+        Gdiplus::RectF back(navX, navY, 200 * s, 46 * s);
+        if (g_setHot == ACT_BACK) FillRound(g, back, 12 * s, pal.chipBg);
+        {
+            Gdiplus::Pen ap(pal.detail, 1.8f);
+            ap.SetStartCap(Gdiplus::LineCapRound);
+            ap.SetEndCap(Gdiplus::LineCapRound);
+            float ax = back.X + 20 * s, ay = back.Y + back.Height * 0.5f;
+            g.DrawLine(&ap, ax + 8 * s, ay - 6 * s, ax, ay);
+            g.DrawLine(&ap, ax, ay, ax + 8 * s, ay + 6 * s);
+        }
+        SText(g, L"返回", 15, FW_NORMAL, pal.detail, light,
+            back.X + 46 * s, back.Y, back.Width - 56 * s, back.Height);
+        HitAdd((int)back.X, (int)back.Y, (int)back.Width, (int)back.Height, ACT_BACK);
+
+        const wchar_t* names[3] = { L"外观", L"显示内容", L"关于" };
+        for (int i = 0; i < 3; i++) {
+            Gdiplus::RectF item(navX, navY + 54 * s + i * 54 * s, 200 * s, 46 * s);
+            bool on = (g_setPage == i);
+            if (on) FillRound(g, item, 12 * s, pal.itemBg);
+            Gdiplus::Color fg = on ? pal.itemFg : pal.detail;
+            DrawNavIcon(g, i == 2 ? 2 : i, item.X + 14 * s, item.Y + 13 * s, 20 * s, fg);
+            SText(g, names[i], 15, FW_NORMAL, fg, light,
+                item.X + 46 * s, item.Y, item.Width - 56 * s, item.Height);
+            HitAdd((int)item.X, (int)item.Y, (int)item.Width, (int)item.Height,
+                ACT_SETNAV + i);
+        }
     }
 
     wchar_t foot[64];
@@ -4424,26 +4611,45 @@ static void SettingsDraw(Gdiplus::Graphics& g)
         page.GetBottom() - 44 * s, 160 * s, 18 * s);
 
     // ---- content ----
-    float cxp = 240 * (float)s;
+    const float cxp = 240 * (float)s;
     float cyp = 28 * (float)s;
-    float cwp = page.Width - 240 * s - 32 * s;
+    const float cwp = page.Width - 240 * s - 32 * s;
 
-    // page heading with the theme's accent bar
-    const wchar_t* titles[3] = { L"外观", L"显示内容", L"关于" };
-    if (g_setPage != 2) {
+    const wchar_t* title = L"";
+    const wchar_t* subtitle = L"";
+    if (g_setMode == 0) {
+        if (g_mainTab == 0) {
+            title = L"硬件显示";
+            subtitle = L"这台机器的处理器、主板、内存、显卡与存储";
+        } else {
+            title = L"目标系统信息";
+            subtitle = L"厂商、系统版本与用户目录，可一键保存成资料";
+        }
+    } else if (g_setPage == 0) {
+        title = L"外观";
+        subtitle = L"面板画在桌面层上，这里决定它离壁纸有多近";
+    } else if (g_setPage == 1) {
+        title = L"显示内容";
+        subtitle = L"关掉的项目不再出现在面板上";
+    }
+
+    if (title[0]) {
         FillRound(g, MRect(cxp, cyp + 6 * s, 4 * s, 24 * s), 2 * s, pal.primary);
-        SText(g, titles[g_setPage], 24, FW_NORMAL, pal.title, light, cxp + 16 * s, cyp,
+        SText(g, title, 24, FW_NORMAL, pal.title, light, cxp + 16 * s, cyp,
             cwp - 16 * s, 32 * s);
-        SText(g, g_setPage == 0 ? L"面板画在桌面层上，这里决定它离壁纸有多近"
-                                : L"关掉的项目不再出现在面板上",
-            14, FW_NORMAL, pal.detail, light, cxp + 16 * s, cyp + 34 * s,
+        SText(g, subtitle, 14, FW_NORMAL, pal.detail, light, cxp + 16 * s, cyp + 34 * s,
             cwp - 16 * s, 20 * s);
         cyp += 68 * s;
     }
 
-    if (g_setPage == 0) PageLook(g, pal, light, cxp, cyp, cwp, (float)s);
-    else if (g_setPage == 1) PageContent(g, pal, light, cxp, cyp, cwp, (float)s);
-    else PageAbout(g, pal, light, cxp, cyp + 30 * s, cwp, (float)s);
+    if (g_setMode == 0) {
+        if (g_mainTab == 0) PageHardware(g, pal, light, cxp, cyp, cwp, (float)s);
+        else PageSystem(g, pal, light, cxp, cyp, cwp, (float)s);
+    } else {
+        if (g_setPage == 0) PageLook(g, pal, light, cxp, cyp, cwp, (float)s);
+        else if (g_setPage == 1) PageContent(g, pal, light, cxp, cyp, cwp, (float)s);
+        else PageAbout(g, pal, light, cxp, cyp + 30 * s, cwp, (float)s);
+    }
 }
 
 static void SettingsPaint(Gdiplus::Graphics& g)
@@ -4535,8 +4741,12 @@ static void SetSliderFromX(int act, int x)
 
 static void PerformAction(int act)
 {
-    if (act >= ACT_NAV && act < ACT_NAV + 3) {
-        g_setPage = act - ACT_NAV;
+    if (act >= ACT_NAV && act < ACT_NAV + 2) {
+        g_mainTab = act - ACT_NAV;          // 主界面：硬件显示 / 目标系统信息
+    } else if (act >= ACT_SETNAV && act < ACT_SETNAV + 3) {
+        g_setPage = act - ACT_SETNAV;       // 设置内：外观 / 显示内容 / 关于
+    } else if (act == ACT_OPEN_SET) {
+        g_setMode = 1;                      // 进入设置（二级）
     } else if (act >= ACT_THEME && act < ACT_THEME + 3) {
         int t = act - ACT_THEME;
         if (t != g_cfg.theme) { g_cfg.theme = t; PanelReload(false); }
@@ -4575,6 +4785,8 @@ static void PerformAction(int act)
         PostMessageW(g_setHwnd, WM_CLOSE, 0, 0);
         return;
     } else if (act == ACT_BACK) {
+        if (g_setMode) g_setMode = 0;       // 设置 → 回主界面
+        else g_mainTab = 0;                 // 系统信息页 → 回硬件显示
         g_setPage = 0;
     } else if (act == ACT_SAVEINFO) {
         if (!g_tiReady) { CollectTargetInfo(&g_ti); g_tiReady = true; }
@@ -5023,8 +5235,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (lParam == WM_RBUTTONUP || lParam == WM_LBUTTONDBLCLK)
             ShowTrayMenu(hwnd);
         else if (lParam == WM_LBUTTONUP) {
-            // 左键单击托盘：打开设置窗口（系统信息独立窗口接上后改为指向它）
-            g_setPage = 0;
+            // 左键单击托盘：打开主界面（硬件显示）
+            g_setMode = 0;
+            g_mainTab = 0;
             OpenSettings();
         }
         return 0;
@@ -5167,6 +5380,11 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
                 } else if (wcscmp(argv[i], L"--theme") == 0 && i + 1 < argc) {
                     // applied after LoadConfig(), which would overwrite it
                     g_themeOverride = ClampInt(_wtoi(argv[++i]), 0, THEME_COUNT - 1);
+                } else if (wcscmp(argv[i], L"--main") == 0 && i + 1 < argc) {
+                    g_mainTab = ClampInt(_wtoi(argv[++i]), 0, 1);
+                } else if (wcscmp(argv[i], L"--tab") == 0 && i + 1 < argc) {
+                    g_dumpSetMode = 1;
+                    g_settingsDumpPage = ClampInt(_wtoi(argv[++i]), 0, 2);
                 } else if (wcscmp(argv[i], L"--dump-info") == 0 && i + 1 < argc) {
                     wcsncpy_s(g_infoDumpPath, MAX_PATH, argv[++i], _TRUNCATE);
                 } else if (wcscmp(argv[i], L"--zoom") == 0 && i + 1 < argc) {
@@ -5236,6 +5454,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
         POINT origin0 = { 0, 0 };
         SettingsLayoutFor(
             MonitorFromPoint(origin0, MONITOR_DEFAULTTOPRIMARY), 0);
+        g_setMode = g_dumpSetMode;
         g_setPage = g_settingsDumpPage;
         LoadLogoBitmaps();
         SettingsSavePng(g_settingsDumpPath);
