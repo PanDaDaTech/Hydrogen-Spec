@@ -1710,7 +1710,7 @@ static Palette MakePalette(bool darkCard, int cardAlpha)
         p.detail = OklchColor(0.70, 0.015, h, 255);
         p.card = OklchColor(0.23, 0.015, h, (BYTE)cardAlpha);
         p.page = OklchColor(0.16, 0.014, h, 255);
-        p.divider = Gdiplus::Color(36, 255, 255, 255);
+        p.divider = Gdiplus::Color(48, 255, 255, 255);
         p.itemBg = OklchColor(0.33, 0.035, h, 255);
         p.itemFg = OklchColor(0.75, 0.10, h, 255);
     } else {
@@ -1721,7 +1721,7 @@ static Palette MakePalette(bool darkCard, int cardAlpha)
         p.detail = OklchColor(0.42, 0.020, h, 255);
         p.card = OklchColor(1.0, 0.0, h, (BYTE)cardAlpha);
         p.page = OklchColor(0.95, 0.010, h, 255);
-        p.divider = Gdiplus::Color(22, 0, 0, 0);
+        p.divider = Gdiplus::Color(38, 0, 0, 0);
         p.itemBg = OklchColor(0.95, 0.025, h, 255);
         p.itemFg = OklchColor(0.55, 0.12, h, 255);
     }
@@ -1799,13 +1799,13 @@ static void ModelAddKV(UiRow* r, const wchar_t* label, const wchar_t* value)
     wcsncpy_s(r->details[r->detailCount++], 320, item, _TRUNCATE);
 }
 
-// 面板/导出用：把 "标签\x1f值" 变成 "标签: 值"
+// 面板/导出用：把 "标签\x1f值" 变成 "标签：值"（中文界面用全角冒号，值不再留空格）
 static void KvToDisplay(const wchar_t* src, wchar_t* out, int cap)
 {
     if (!out || cap <= 2) return;
     int n = 0;
     for (; src && *src && n < cap - 3; ++src) {
-        if (*src == 0x1f) { out[n++] = L':'; out[n++] = L' '; }
+        if (*src == 0x1f) out[n++] = L'\uFF1A';
         else out[n++] = *src;
     }
     out[n] = 0;
@@ -2015,7 +2015,7 @@ static bool SaveTargetInfo(const wchar_t* path, const TargetInfo* t)
     WriteUtf8(f, L"================================================\r\n\r\n");
     WriteUtf8(f, L"【厂商与支持】\r\n");
 #define KV(label, field) do { \
-        WPrintf(line, 1024, L"%s: %s\r\n", label, (t->field)[0] ? (t->field) : L""); \
+        WPrintf(line, 1024, L"%s：%s\r\n", label, (t->field)[0] ? (t->field) : L""); \
         WriteUtf8(f, line); \
     } while (0)
     KV(L"制造商", manufacturer);
@@ -2352,11 +2352,11 @@ static void BuildModel(void)
         : (g_smbios.sysProduct[0] ? g_smbios.sysProduct : L"");
     wchar_t boardTitle[256] = L"主板";
     if (boardMfr[0] && boardProduct[0])
-        WPrintf(boardTitle, 256, L"主板: %s %s", boardMfr, boardProduct);
+        WPrintf(boardTitle, 256, L"主板：%s %s", boardMfr, boardProduct);
     else if (boardProduct[0])
-        WPrintf(boardTitle, 256, L"主板: %s", boardProduct);
+        WPrintf(boardTitle, 256, L"主板：%s", boardProduct);
     else if (boardMfr[0])
-        WPrintf(boardTitle, 256, L"主板: %s", boardMfr);
+        WPrintf(boardTitle, 256, L"主板：%s", boardMfr);
     r = ModelAddRow(ICON_BOARD, boardTitle);
 
     if (g_smbios.biosVersion[0])
@@ -2412,13 +2412,13 @@ static void BuildModel(void)
     double totalGb = (double)totalBytes / 1073741824.0;
     int memCount = g_smbios.memCount;
     if (memType[0] && memCount > 1)
-        WPrintf(memTitle, 256, L"内存: %.0f GB %s ×%d", totalGb, memType, memCount);
+        WPrintf(memTitle, 256, L"内存：%.0f GB %s ×%d", totalGb, memType, memCount);
     else if (memType[0])
-        WPrintf(memTitle, 256, L"内存: %.0f GB %s", totalGb, memType);
+        WPrintf(memTitle, 256, L"内存：%.0f GB %s", totalGb, memType);
     else if (memCount > 1)
-        WPrintf(memTitle, 256, L"内存: %.0f GB ×%d", totalGb, memCount);
+        WPrintf(memTitle, 256, L"内存：%.0f GB ×%d", totalGb, memCount);
     else
-        WPrintf(memTitle, 256, L"内存: %.0f GB", totalGb);
+        WPrintf(memTitle, 256, L"内存：%.0f GB", totalGb);
 
     r = ModelAddRow(ICON_RAM, memTitle);
 
@@ -2482,33 +2482,31 @@ static void BuildModel(void)
         for (int i = 0, n = 1; i < gc; i++)
             if (i != act) order[n++] = i;
 
+        // 单卡直接把型号写进标题；多卡标题只写「显卡」，由编号行列出全部，
+        // 否则标题和一个编号行说的是同一块卡。显示器型号/尺寸曾经也被拼进
+        // 这一行（"显卡: BOE NE156QHM 15.6\" 2560x1600"），那是显示器的信息。
         wchar_t title[256];
-        DisplayInfo di;
-        if (GetDisplayInfo(&di) && di.name[0]) {
-            wchar_t size[32] = { 0 };
-            if (di.diagIn > 3.0) WPrintf(size, 32, L"%.1f\"", di.diagIn);
-            wchar_t mode[80] = { 0 };
-            if (di.w > 0 && di.hz > 0) WPrintf(mode, 80, L"%dx%d %dHz", di.w, di.h, di.hz);
-            else if (di.w > 0) WPrintf(mode, 80, L"%dx%d", di.w, di.h);
-            if (size[0] && mode[0])
-                WPrintf(title, 256, L"显卡: %s %s %s", di.name, size, mode);
-            else if (mode[0])
-                WPrintf(title, 256, L"显卡: %s %s", di.name, mode);
-            else
-                WPrintf(title, 256, L"显卡: %s", di.name);
-        } else {
-            WPrintf(title, 256, L"显卡: %s", gpus[act].name);
-        }
+        if (gc > 1)
+            wcsncpy_s(title, 256, L"显卡", _TRUNCATE);
+        else
+            WPrintf(title, 256, L"显卡：%s", gpus[act].name);
         r = ModelAddRow(ICON_GPU, title);
-        for (int i = 0; i < gc; i++) {
+
+        if (gc > 1) {
+            for (int i = 0; i < gc; i++) {
+                wchar_t vram[32];
+                FormatVram(GpuVramBytes(gpus[order[i]].key), vram, 32);
+                wchar_t d[320];
+                if (vram[0])
+                    WPrintf(d, 320, L"%d. %s %s", i + 1, gpus[order[i]].name, vram);
+                else
+                    WPrintf(d, 320, L"%d. %s", i + 1, gpus[order[i]].name);
+                ModelAddDetail(r, d);
+            }
+        } else {
             wchar_t vram[32];
-            FormatVram(GpuVramBytes(gpus[order[i]].key), vram, 32);
-            wchar_t d[320];
-            if (vram[0])
-                WPrintf(d, 320, L"%d. %s %s", i + 1, gpus[order[i]].name, vram);
-            else
-                WPrintf(d, 320, L"%d. %s", i + 1, gpus[order[i]].name);
-            ModelAddDetail(r, d);
+            FormatVram(GpuVramBytes(gpus[act].key), vram, 32);
+            if (vram[0]) ModelAddKV(r, L"显存", vram);
         }
     }
 
@@ -2518,7 +2516,7 @@ static void BuildModel(void)
         DisplayInfo di;
         if (GetDisplayInfo(&di)) {
             wchar_t title[256];
-            WPrintf(title, 256, L"显示器: 主屏 %s",
+            WPrintf(title, 256, L"显示器：主屏 %s",
                 di.name[0] ? di.name : L"内置显示屏");
             r = ModelAddRow(ICON_MONITOR, title);
             if (di.diagIn > 3.0) {
@@ -2547,9 +2545,9 @@ static void BuildModel(void)
         // 没有设备就整段不出现，不留「未检测到」这种空行
         for (int i = 0; i < nn; i++) {
             wchar_t t[200];
-            WPrintf(t, 200, L"NPU: %s", npus[i].name);
+            WPrintf(t, 200, L"NPU：%s", npus[i].name);
             r = ModelAddRow(ICON_NPU, t);
-            if (i == 0) ModelAddDetail(r, L"类型: 神经网络加速器");
+            if (i == 0) ModelAddDetail(r, L"类型：神经网络加速器");
         }
     }
 
@@ -2559,12 +2557,12 @@ static void BuildModel(void)
     memset(disks, 0, sizeof(disks));
     int dc = EnumDisks(disks, 6);
     if (dc == 0) {
-        r = ModelAddRow(ICON_DISK, L"硬盘: 未检测到");
+        r = ModelAddRow(ICON_DISK, L"硬盘：未检测到");
         (void)r;
     } else {
         for (int i = 0; i < dc; i++) {
             wchar_t title[200];
-            WPrintf(title, 200, L"硬盘: %s", disks[i].model);
+            WPrintf(title, 200, L"硬盘：%s", disks[i].model);
             r = ModelAddRow(ICON_DISK, title);
             wchar_t capText[32];
             FormatCapacity(disks[i].bytes, capText, 32);
@@ -2579,9 +2577,9 @@ static void BuildModel(void)
     {
         BatteryInfo bat;
         if (ReadBattery(&bat)) {
-            wchar_t title[256];
-            WPrintf(title, 256, L"电池: %s", bat.name[0] ? bat.name : L"笔记本电池");
-            r = ModelAddRow(ICON_BATTERY, title);
+            // 设备描述是「Microsoft ACPI 兼容的控制方法电池」这类驱动层名字，
+            // 对用户没有意义，标题固定写「电池」，容量信息走明细。
+            r = ModelAddRow(ICON_BATTERY, L"电池");
 
             if (bat.designed > 0) {
                 wchar_t v[32];
@@ -2612,18 +2610,19 @@ static void BuildModel(void)
         }
     }
 
-    // ---- 声卡 ----
+    // 显示内容开关里的名字要和硬件页的分区标题一致（见 PageContent 的 names[]）。
+    // 声卡只报主设备名 + 设备总数，标题不拼设备描述。
     g_skipSection = !g_cfg.showAudio;
     {
         wchar_t au[192] = { 0 };
         int total = 0;
         if (EnumAudio(au, 192, &total) > 0) {
             wchar_t title[256];
-            WPrintf(title, 256, L"声卡: %s", au);
+            WPrintf(title, 256, L"声卡：%s", au);
             r = ModelAddRow(ICON_AUDIO, title);
             if (total > 1) {
                 wchar_t v[48];
-                WPrintf(v, 48, L"共 %d 个", total);
+                WPrintf(v, 48, L"%d 个", total);
                 ModelAddKV(r, L"设备", v);
             }
         }
@@ -2636,27 +2635,27 @@ static void BuildModel(void)
     for (int i = 0; i < nc; i++) {
         NicInfo& nic = nics[i];
         wchar_t title[256];
-        WPrintf(title, 256, L"网卡: %s", nic.name);
+        WPrintf(title, 256, L"网卡：%s", nic.name);
         r = ModelAddRow(ICON_NET, title);
 
         wchar_t line[384] = { 0 };
-        WPrintf(line, 384, L"类型: %s", nic.wireless ? L"无线" : L"有线");
+        WPrintf(line, 384, L"类型：%s", nic.wireless ? L"无线" : L"有线");
         if (nic.mac[0]) {
             wchar_t tmp[384];
-            WPrintf(tmp, 384, L"%s    MAC: %s", line, nic.mac);
+            WPrintf(tmp, 384, L"%s    MAC：%s", line, nic.mac);
             wcsncpy_s(line, 384, tmp, _TRUNCATE);
         }
         ModelAddDetail(r, line);
 
         wchar_t line2[384] = { 0 };
         if (nic.ip[0])
-            WPrintf(line2, 384, L"IP: %s", nic.ip);
+            WPrintf(line2, 384, L"IP：%s", nic.ip);
         if (nic.speedBps > 0) {
             wchar_t sp[32] = { 0 };
             FormatSpeed(nic.speedBps, sp, 32);
             if (sp[0]) {
                 if (line2[0]) wcscat_s(line2, 384, L"    ");
-                wcscat_s(line2, 384, L"速率: ");
+                wcscat_s(line2, 384, L"速率：");
                 wcscat_s(line2, 384, sp);
             }
         }
@@ -2664,10 +2663,10 @@ static void BuildModel(void)
 
         wchar_t line3[384] = { 0 };
         if (nic.ssid[0])
-            WPrintf(line3, 384, L"SSID: %s", nic.ssid);
+            WPrintf(line3, 384, L"SSID：%s", nic.ssid);
         if (nic.gateway[0]) {
             if (line3[0]) wcscat_s(line3, 384, L"    ");
-            wcscat_s(line3, 384, L"网关: ");
+            wcscat_s(line3, 384, L"网关：");
             wcscat_s(line3, 384, nic.gateway);
         }
         if (line3[0]) ModelAddDetail(r, line3);
@@ -2676,28 +2675,41 @@ static void BuildModel(void)
     // ---- 接口支持（按设备类是否存在判断）----
     g_skipSection = !g_cfg.showPorts;
     {
+        // 只报「有没有这个类别」。设备类枚举会把虚拟网卡、隐藏设备一起数进来
+        // （实测网络类能数出 15 个），拿来做数量就是错信息；以前还写死过
+        // USB「3.x 或更高」这种猜法，同样不可信，一并去掉，只留名字。
         struct PortSpec
         {
             const wchar_t* name;
             const GUID* cls;
-            const wchar_t* proto;
         };
         static const PortSpec kPorts[] = {
-            { L"USB", &kUsbClassGuid, L"3.x 或更高" },
-            { L"键盘", &kKeyboardClassGuid, L"Keyboard" },
-            { L"触控板", &kMouseClassGuid, L"Mouse" },
-            { L"摄像头", &kImageClassGuid, L"Camera" },
-            { L"网络", &kNetClassGuid, L"Network" },
-            { L"SATA", &kScsiClassGuid, L"Serial" },
-            { L"光驱", &kCdromClassGuid, L"Optical" },
-            { L"音频", &kMediaClassGuid, L"Audio" },
+            { L"USB", &kUsbClassGuid },
+            { L"键盘", &kKeyboardClassGuid },
+            { L"触控板", &kMouseClassGuid },
+            { L"摄像头", &kImageClassGuid },
+            { L"网络", &kNetClassGuid },
+            { L"SATA", &kScsiClassGuid },
+            { L"光驱", &kCdromClassGuid },
+            { L"音频", &kMediaClassGuid },
         };
         UiRow* portRow = NULL;
+        wchar_t line[256] = { 0 };
+        int perLine = 0;
         for (size_t i = 0; i < sizeof(kPorts) / sizeof(kPorts[0]); i++) {
             if (CountClassDevices(kPorts[i].cls) <= 0) continue;
             if (!portRow) portRow = ModelAddRow(ICON_PLUG, L"接口支持");
-            ModelAddKV(portRow, kPorts[i].name, kPorts[i].proto);
+            if (perLine > 0) wcscat_s(line, 256, L" · ");
+            wcscat_s(line, 256, kPorts[i].name);
+            // 每 3 个一行：面板最窄时一行放不下 4 个中文类别名，
+            // 3 个既不会截断，两行时也是 3+3 而不是 4+2。
+            if (++perLine >= 3) {
+                ModelAddDetail(portRow, line);
+                line[0] = 0;
+                perLine = 0;
+            }
         }
+        if (line[0]) ModelAddDetail(portRow, line);
     }
 
     g_skipSection = false;
@@ -4664,17 +4676,23 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
             g.DrawPath(&ring, &p);
         }
         Gdiplus::Color capColor = (g_cfg.theme == i) ? pal.itemFg : sub;
-        SText(g, names[i], 14, FW_NORMAL, capColor, light,
-            tx, thumb.GetBottom() + 6 * s, tileW - 24 * s, 22 * s);
-
-        float dotR = 6.5f * s;
-        float dx = tx + tileW - dotR * 2, dy = thumb.GetBottom() + 6 * s + (22 * s - dotR * 2) * 0.5f;
-        Gdiplus::Pen dotPen((g_cfg.theme == i) ? pal.primary : pal.chipBg, 1.8f * s);
+        // 单选圈放文字左边、贴着瓦片左边线，三个瓦片才能对齐成一列。
+        // 原来钉在 tileW - 24dp 的右端、文字又左对齐，窄标题（"卡片"）
+        // 旁边就空出一大截，看着像圈在漂。
+        const float capY = thumb.GetBottom() + 6 * s;
+        const float dotR = 6.0f * s;
+        const float dx = tx;
+        const float dy = capY + (22 * s - dotR * 2) * 0.5f;
+        Gdiplus::Pen dotPen((g_cfg.theme == i) ? pal.primary
+            : Gdiplus::Color(110, pal.detail.GetR(), pal.detail.GetG(), pal.detail.GetB()),
+            1.8f * s);
         g.DrawEllipse(&dotPen, dx, dy, dotR * 2, dotR * 2);
         if (g_cfg.theme == i) {
             Gdiplus::SolidBrush dotB(pal.primary);
-            g.FillEllipse(&dotB, dx + 3.5f * s, dy + 3.5f * s, dotR * 2 - 7 * s, dotR * 2 - 7 * s);
+            g.FillEllipse(&dotB, dx + 3.2f * s, dy + 3.2f * s, dotR * 2 - 6.4f * s, dotR * 2 - 6.4f * s);
         }
+        SText(g, names[i], 14, FW_NORMAL, capColor, light,
+            dx + dotR * 2 + 8 * s, capY, tileW - dotR * 2 - 8 * s, 22 * s);
         HitAdd((int)tx, (int)ty, (int)tileW, (int)(thumbH + 30 * s), ACT_THEME + i);
     }
 
@@ -4761,7 +4779,9 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
         Gdiplus::RectF rst(right - rstW, ry, rstW, btnH);
         DrawTextButton(g, rst, L"复位", pal, light, g_setHot == ACT_POS + 4, ACT_POS + 4);
 
-        float bx = rst.X - bGap - 4 * (btnW + bGap) + bGap;
+        // 「复位」和四个方向键不是一类操作，多留一段间距分开，
+        // 否则读起来像第五个方向键。
+        float bx = rst.X - 14 * s - 4 * (btnW + bGap) + bGap;
         for (int i = 0; i < 4; i++) {
             Gdiplus::RectF b(bx + i * (btnW + bGap), ry, btnW, btnH);
             DrawArrowButton(g, b, i, pal, g_setHot == ACT_POS + i, ACT_POS + i);
@@ -4788,7 +4808,7 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
         L"面板 / 尺寸 / 分辨率 / 刷新率",
         L"型号 / 容量 / 分区格式 / 总线",
         L"设计容量 / 满充 / 健康度 / 循环次数",
-        L"型号 / 接口 / 采样",
+        L"型号 / 设备数量",
         L"类型 / MAC / IP / 速率 / SSID / 网关",
         L"USB / 键鼠 / 摄像头 / 网络 / SATA / 音频",
         L"神经网络加速器（处理器带 NPU 才有）" };
@@ -4817,26 +4837,28 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
             g.DrawLine(&line, x + 20 * s, ry - 2 * s, card.GetRight() - 20 * s, ry - 2 * s);
         }
 
-        // 84x48 preview of what the panel row will look like.
-        Gdiplus::RectF prev(x + 20 * s, c - 24 * s, 84 * s, 48 * s);
-        FillRound(g, prev, 9 * s, pal.chipBg);
-        Gdiplus::Pen glyphPen(pal.chipFg, 1.4f);
+        // 每行的图标方块：和硬件页 / 摘要卡同一套（圆角方块 + 描边字形）。
+        // 这里以前画的是 84x48 的"面板行缩略图"（图标 + 三条灰线代表文字），
+        // 那三条线跟右边的标题/描述说的是同一件事，纯噪声。
+        const float chipBox = 42 * s;
+        Gdiplus::RectF prev(x + 20 * s, c - chipBox * 0.5f, chipBox, chipBox);
+        FillRound(g, prev, chipBox * 0.3f, pal.chipBg);
+        Gdiplus::Pen glyphPen(pal.chipFg, 1.5f * s);
         glyphPen.SetLineJoin(Gdiplus::LineJoinRound);
         glyphPen.SetStartCap(Gdiplus::LineCapRound);
         glyphPen.SetEndCap(Gdiplus::LineCapRound);
         static const int kToggleIcon[TOGGLE_COUNT] = {
             ICON_CPU, ICON_BOARD, ICON_RAM, ICON_GPU, ICON_MONITOR,
             ICON_DISK, ICON_BATTERY, ICON_AUDIO, ICON_NET, ICON_PLUG, ICON_NPU };
-        DrawGlyph(g, glyphPen, kToggleIcon[i], prev.X + 8 * s, prev.Y + 12 * s,
-            24 * s, (float)s);
-        FillRound(g, MRect(prev.X + 40 * s, prev.Y + 15 * s, 34 * s, 4 * s), 2 * s, pal.title);
-        FillRound(g, MRect(prev.X + 40 * s, prev.Y + 25 * s, 30 * s, 3 * s), 1.5f * s, pal.detail);
-        FillRound(g, MRect(prev.X + 40 * s, prev.Y + 33 * s, 24 * s, 3 * s), 1.5f * s, pal.detail);
+        const float gsz = chipBox * 0.56f;
+        DrawGlyph(g, glyphPen, kToggleIcon[i], prev.X + (chipBox - gsz) * 0.5f,
+            prev.Y + (chipBox - gsz) * 0.5f, gsz, (float)s);
 
+        const float textLeft = prev.GetRight() + 16 * s;
         SText(g, names[i], 16, FW_NORMAL, pal.title, light,
-            x + 122 * s, c - 24 * s, w - 122 * s - 84 * s, 24 * s);
+            textLeft, c - 24 * s, card.GetRight() - 84 * s - textLeft, 24 * s);
         SText(g, metas[i], 13.5f, FW_NORMAL, pal.detail, light,
-            x + 122 * s, c + 4 * s, w - 122 * s - 84 * s, 20 * s);
+            textLeft, c + 4 * s, card.GetRight() - 84 * s - textLeft, 20 * s);
 
         Gdiplus::RectF sw(card.GetRight() - 20 * s - 44 * s, c - 12 * s, 44 * s, 24 * s);
         DrawSwitch(g, sw, ToggleValue(i) != 0, pal);
@@ -4881,7 +4903,8 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
 
     float iy = ty + 96 * s;
     const float infoRow = 50 * s;
-    Gdiplus::RectF info(x + 28 * s, iy, w - 56 * s, 4 * infoRow + 12 * s);
+    // 信息卡跟其它页同宽（以前两边各缩 28dp，切页时卡片会"缩一下"）
+    Gdiplus::RectF info(x, iy, w, 4 * infoRow + 12 * s);
     FillRound(g, info, 14 * s, pal.card);
     const wchar_t* keys[4] = { L"许可", L"界面字体", L"数据来源", L"运行方式" };
     const wchar_t* vals[4] = {
@@ -4902,7 +4925,8 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
     }
 
     float by = info.GetBottom() + 20 * s;
-    float bw1 = 156 * s, bw2 = 168 * s, bh = 44 * s;
+    // 两个按钮等宽，否则文案长短不一，摆在一起像没对齐
+    float bw1 = 166 * s, bw2 = 166 * s, bh = 44 * s;
     Gdiplus::RectF b1(cx - (bw1 + bw2 + 12 * s) * 0.5f, by, bw1, bh);
     Gdiplus::RectF b2(b1.GetRight() + 12 * s, by, bw2, bh);
     FillRound(g, b1, 11 * s, pal.chipBg);
@@ -5044,16 +5068,23 @@ static bool g_tiReady = false;
 static int g_hwScroll = 0;
 static int g_hwMaxScroll = 0;
 
-static float HwPairWidth(const KvPair& kv, float s, float labelW, float valPx, float gap)
+// 一组「标签 │ 值」的间距常量（dp）。竖线跟着标签实测宽度走，不再用固定列宽：
+// 固定列宽下 2 字标签与竖线之间空 30dp、4 字标签只剩 6dp，同一行里疏密乱跳。
+static const float kHwLabelGap = 7.0f;   // 标签 → 竖线
+static const float kHwSepGap = 9.0f;     // 竖线 → 值
+static const float kHwCellGap = 20.0f;   // 值 → 下一组标签
+
+static float HwPairWidth(const KvPair& kv, float s)
 {
     float w = 0;
-    if (kv.label[0]) w += labelW + 9 * s + 1 + 9 * s;
+    if (kv.label[0])
+        w += MeasureHw(kv.label) + (kHwLabelGap + kHwSepGap) * s + 1.0f;
     w += MeasureHw(kv.value);
-    return w + gap;
+    return w + kHwCellGap * s;
 }
 
 // 一个分区占几行
-static int HwPairLines(const UiRow& row, float textW, float s, float labelW, float valPx)
+static int HwPairLines(const UiRow& row, float textW, float s)
 {
     KvPair parts[12];
     int lines = 1;
@@ -5061,7 +5092,7 @@ static int HwPairLines(const UiRow& row, float textW, float s, float labelW, flo
     for (int d = 0; d < row.detailCount; d++) {
         int n = SplitDetail(row.details[d], parts, 12);
         for (int i = 0; i < n; i++) {
-            float pw = HwPairWidth(parts[i], s, labelW, valPx, 20 * s);
+            float pw = HwPairWidth(parts[i], s);
             bool wide = (parts[i].label[0] == 0);
             if (used > 0 && ((wide) || used + pw > textW)) {
                 lines++;
@@ -5170,11 +5201,12 @@ static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
     const float chip = 30 * s;
     const float titleH = 15.0f;
     const float valPx = 12.5f;
-    const float valPxPx = valPx * (float)SettingsScale();
-    const float labelW = 54 * s;
+    // 标题行与图标方块同高：两者各自垂直居中，中线才重合。
+    // 原来标题行 19dp、图标 30dp，图标整体比标题低半格，看着像"图标偏了"。
+    const float titleLine = chip;
     const float lineH = 21 * s;
     const float secGap = 11 * s;
-    const float textX = x + pad + chip + 12 * s;
+    const float textX = x + pad + chip + 14 * s;
     const float textW = x + w - pad - textX;
 
     HwMeasurerBegin((int)(valPx * (float)SettingsScale() + 0.5));
@@ -5182,8 +5214,8 @@ static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
     // 先算总高（两遍绘制里第一遍）
     float natural = pad;
     for (int i = 0; i < g_rowCount; i++) {
-        int lines = HwPairLines(g_rows[i], textW, s, labelW, valPxPx);
-        float body = titleH * (float)s + 3 * s + lines * lineH;
+        int lines = HwPairLines(g_rows[i], textW, s);
+        float body = titleLine + 2 * s + lines * lineH;
         natural += (body > chip ? body : chip) + secGap;
         if (i == g_rowCount - 1) natural -= secGap;
     }
@@ -5205,8 +5237,8 @@ static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float cy = listTop + pad;
     for (int i = 0; i < g_rowCount; i++) {
         const UiRow& row = g_rows[i];
-        int lines = HwPairLines(row, textW, s, labelW, valPxPx);
-        float body = titleH * (float)s + 3 * s + lines * lineH;
+        int lines = HwPairLines(row, textW, s);
+        float body = titleLine + 2 * s + lines * lineH;
         float rowH = (body > chip) ? body : chip;
 
         if (i > 0) {
@@ -5215,7 +5247,7 @@ static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
         }
 
         // 图标：和面板卡片样式同款（圆角方块 + 描边字形）
-        Gdiplus::RectF box(x + pad, cy + 1 * s, chip, chip);
+        Gdiplus::RectF box(x + pad, cy, chip, chip);
         FillRound(g, box, chip * 0.3f, pal.chipBg);
         Gdiplus::Pen gp(pal.chipFg, 1.5f * s);
         gp.SetLineJoin(Gdiplus::LineJoinRound);
@@ -5225,37 +5257,39 @@ static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
         DrawGlyph(g, gp, row.icon, box.X + (chip - gsz) * 0.5f,
             box.Y + (chip - gsz) * 0.5f, gsz, s);
 
-        float ty = cy + 1 * s;
-        SText(g, row.title, titleH, FW_NORMAL, pal.title, light, textX, ty, textW, 19 * s);
-        ty += titleH * (float)s + 3 * s;
+        SText(g, row.title, titleH, FW_NORMAL, pal.title, light, textX, cy, textW, titleLine);
+        float ty = cy + titleLine + 2 * s;
 
-        // 明细：标签 ｜ 值，放不下换行
+        // 明细：标签 │ 值，放不下换行
         KvPair parts[12];
         float cx = textX;
         float cyy = ty;
         for (int d = 0; d < row.detailCount; d++) {
             int n = SplitDetail(row.details[d], parts, 12);
             for (int k = 0; k < n; k++) {
-                const float pw = HwPairWidth(parts[k], s, labelW, valPxPx, 20 * s);
+                const float pw = HwPairWidth(parts[k], s);
                 const bool wide = (parts[k].label[0] == 0);
                 if (cx > textX && (wide || cx + pw > textX + textW)) {
                     cx = textX;
                     cyy += lineH;
                 }
                 if (!wide) {
+                    const float lw = MeasureHw(parts[k].label);
                     SText(g, parts[k].label, valPx, FW_NORMAL, pal.detail, light,
-                        cx, cyy, labelW, lineH);
-                    const float sx = cx + labelW + 9 * s;
+                        cx, cyy, lw + 2 * s, lineH);
+                    const float sx = cx + lw + kHwLabelGap * s;
                     Gdiplus::Pen sep(Gdiplus::Color(120, pal.detail.GetR(),
                         pal.detail.GetG(), pal.detail.GetB()), 1.0f);
                     g.DrawLine(&sep, sx, cyy + 6 * s, sx, cyy + lineH - 6 * s);
+                    const float vx = sx + kHwSepGap * s;
                     SText(g, parts[k].value, valPx, FW_NORMAL, pal.title, light,
-                        sx + 10 * s, cyy, textW - (sx + 10 * s - textX), lineH);
-                    cx += labelW + 9 * s + 11 * s + MeasureHw(parts[k].value) + 20 * s;
+                        vx, cyy, textX + textW - vx, lineH);
+                    cx += lw + (kHwLabelGap + kHwSepGap) * s + 1.0f
+                        + MeasureHw(parts[k].value) + kHwCellGap * s;
                 } else {
                     SText(g, parts[k].value, valPx, FW_NORMAL, pal.title, light,
-                        cx, cyy, textW, lineH);
-                    cx += MeasureHw(parts[k].value) + 20 * s;
+                        cx, cyy, textX + textW - cx, lineH);
+                    cx += MeasureHw(parts[k].value) + kHwCellGap * s;
                 }
             }
         }
@@ -5325,6 +5359,18 @@ static void GetLocalIpText(wchar_t* out, int cch)
     free(addrs);
 }
 
+// 一行「标签 + 值」。值取不到时（注册表里没有、OEM 没写）显式写「未填写」，
+// 空着会让整行变成一条看起来像没画出来的白条。
+static void SysKV(Gdiplus::Graphics& g, const Palette& pal, bool light,
+    const wchar_t* key, const wchar_t* val, float kx, float vx, float ry,
+    float keyW, float valW, float rowH, float dp)
+{
+    SText(g, key, dp, FW_NORMAL, pal.detail, light, kx, ry, keyW, rowH);
+    const bool empty = (!val || !val[0]);
+    SText(g, empty ? L"未填写" : val, dp, FW_NORMAL,
+        empty ? pal.detail : pal.title, light, vx, ry, valW, rowH);
+}
+
 static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float x, float y, float w, float s, float availH)
 {
@@ -5359,7 +5405,11 @@ static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
     FillRound(g, MRect(x, y, w, c1h), 16 * s, pal.card);
 
     Gdiplus::RectF slot(x + pad, y + pad, 116 * s, c1h - pad * 2);
-    FillRound(g, slot, 12 * s, pal.chipBg);
+    // OEM logo 几乎都是白底 BMP（oemlogo.bmp），直接贴进深色槽里会露出一块
+    // 突兀的白方砖；深色页把槽也做成白的，看起来才是一张「品牌卡」。
+    // 注意这里的 light 是「深色页」的意思（见标题栏 logo 的取图逻辑）。
+    FillRound(g, slot, 12 * s,
+        light ? Gdiplus::Color(255, 255, 255, 255) : pal.chipBg);
     bool drew = false;
     if (t.logoFile[0]) {
         Gdiplus::Bitmap bmp(t.logoFile);
@@ -5393,10 +5443,8 @@ static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
         };
         float ky = y + pad;
         for (int i = 0; i < 5; i++) {
-            SText(g, rows[i].k, 13.5f, FW_NORMAL, pal.detail, light,
-                kx, ky + i * rowH, keyW, rowH);
-            SText(g, rows[i].v, 13.5f, FW_NORMAL, pal.title, light,
-                kx + keyW + 10 * s, ky + i * rowH, vw, rowH);
+            SysKV(g, pal, light, rows[i].k, rows[i].v, kx, kx + keyW + 10 * s,
+                ky + i * rowH, keyW, vw, rowH, 13.5f);
         }
     }
 
@@ -5440,15 +5488,13 @@ static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
 
     for (int i = 0; i < 9; i++) {
         float ry = c2y + pad + i * rowH;
-        SText(g, leftCol[i].k, 13, FW_NORMAL, pal.detail, light, x + pad, ry, lk, rowH);
-        SText(g, leftCol[i].v, 13, FW_NORMAL, pal.title, light, x + pad + lk + 4 * s, ry,
-            leftW - lk - 4 * s, rowH);
+        SysKV(g, pal, light, leftCol[i].k, leftCol[i].v,
+            x + pad, x + pad + lk + 4 * s, ry, lk, leftW - lk - 4 * s, rowH, 13.0f);
     }
     for (int i = 0; i < 11; i++) {
         float ry = c2y + pad + i * rowH;
-        SText(g, rightCol[i].k, 13, FW_NORMAL, pal.detail, light, rightX, ry, rk, rowH);
-        SText(g, rightCol[i].v, 13, FW_NORMAL, pal.title, light, rightX + rk, ry,
-            rightW - rk, rowH);
+        SysKV(g, pal, light, rightCol[i].k, rightCol[i].v,
+            rightX, rightX + rk, ry, rk, rightW - rk, rowH, 13.0f);
     }
 
     // ---------------- 按钮行 ----------------
