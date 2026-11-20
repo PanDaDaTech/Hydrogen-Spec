@@ -17,6 +17,7 @@
 #include <propidl.h>
 #include <gdiplus.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <dbt.h>
 #include <intrin.h>
 #include <stdio.h>
@@ -35,6 +36,7 @@
 #pragma comment(lib, "setupapi.lib")
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "ole32.lib")
+#pragma comment(lib, "uuid.lib")
 #pragma comment(lib, "user32.lib")
 #pragma comment(lib, "gdi32.lib")
 
@@ -1686,6 +1688,246 @@ static void ModelAddDetail(UiRow* r, const wchar_t* text)
     wcsncpy_s(r->details[r->detailCount++], 256, text ? text : L"", _TRUNCATE);
 }
 
+// ---------------------------------------------------------------------------
+// 目标系统信息：制造商 / 型号 / OEM Logo / 系统版本 / 用户目录
+// 供「系统信息 + 资料保存」使用。全部来自注册表与 Shell API，无 WMI 依赖。
+// ---------------------------------------------------------------------------
+
+struct TargetInfo
+{
+    wchar_t manufacturer[128];
+    wchar_t model[192];
+    wchar_t phone[64];
+    wchar_t supportUrl[256];
+    wchar_t logoFile[512];      // OEM Logo 实际文件（不存在则为空）
+
+    wchar_t systemDrive[8];     // "C:"
+    wchar_t computerName[128];
+    wchar_t osName[192];
+    wchar_t userName[128];
+    wchar_t edition[128];       // CoreCountrySpecific
+    wchar_t arch[32];           // 64 位
+    wchar_t kernel[32];         // 6.3
+    wchar_t releaseId[32];      // 23H2
+    wchar_t build[32];          // 22631
+    wchar_t ubr[16];            // 6199
+    wchar_t lab[160];           // 22631.ni_release.220506-1250
+    wchar_t installDate[64];    // 2023/03/07 01:11:32
+    wchar_t regUser[128];
+    wchar_t regOrg[128];
+
+    wchar_t desktop[512];
+    wchar_t downloads[512];
+    wchar_t favorites[512];
+    wchar_t documents[512];
+    wchar_t pictures[512];
+    wchar_t music[512];
+    wchar_t videos[512];
+};
+
+static bool FileExistsW(const wchar_t* path)
+{
+    DWORD a = GetFileAttributesW(path);
+    return a != INVALID_FILE_ATTRIBUTES && !(a & FILE_ATTRIBUTE_DIRECTORY);
+}
+
+static void RegReadStr(HKEY root, const wchar_t* sub, const wchar_t* name,
+    wchar_t* out, int cch)
+{
+    if (!out || cch <= 0) return;
+    out[0] = 0;
+    HKEY k = NULL;
+    if (RegOpenKeyExW(root, sub, 0, KEY_READ | KEY_WOW64_64KEY, &k) != ERROR_SUCCESS)
+        return;
+    DWORD type = 0;
+    DWORD size = (DWORD)cch * sizeof(wchar_t);
+    if (RegQueryValueExW(k, name, NULL, &type, (LPBYTE)out, &size) != ERROR_SUCCESS)
+        out[0] = 0;
+    else
+        out[cch - 1] = 0;
+    RegCloseKey(k);
+}
+
+static DWORD RegReadDword(HKEY root, const wchar_t* sub, const wchar_t* name)
+{
+    HKEY k = NULL;
+    if (RegOpenKeyExW(root, sub, 0, KEY_READ | KEY_WOW64_64KEY, &k) != ERROR_SUCCESS)
+        return 0;
+    DWORD type = 0, val = 0, size = sizeof(val);
+    if (RegQueryValueExW(k, name, NULL, &type, (LPBYTE)&val, &size) != ERROR_SUCCESS)
+        val = 0;
+    RegCloseKey(k);
+    return val;
+}
+
+static void KnownFolderPath(const KNOWNFOLDERID& id, wchar_t* out, int cch)
+{
+    out[0] = 0;
+    PWSTR p = NULL;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, NULL, &p)) && p) {
+        wcsncpy_s(out, cch, p, _TRUNCATE);
+        CoTaskMemFree(p);
+    }
+}
+
+static void CollectTargetInfo(TargetInfo* t)
+{
+    memset(t, 0, sizeof(*t));
+
+    SmbiosInfo si;
+    memset(&si, 0, sizeof(si));
+    ParseSmbios(&si);
+    SmbiosRegFallback(&si);
+
+    const wchar_t* kOem = L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\OEMInformation";
+    RegReadStr(HKEY_LOCAL_MACHINE, kOem, L"Manufacturer", t->manufacturer, 128);
+    RegReadStr(HKEY_LOCAL_MACHINE, kOem, L"Model", t->model, 192);
+    RegReadStr(HKEY_LOCAL_MACHINE, kOem, L"SupportPhone", t->phone, 64);
+    RegReadStr(HKEY_LOCAL_MACHINE, kOem, L"SupportURL", t->supportUrl, 256);
+    if (!t->manufacturer[0])
+        wcsncpy_s(t->manufacturer, 128, si.sysManufacturer, _TRUNCATE);
+    if (!t->model[0])
+        wcsncpy_s(t->model, 192, si.sysProduct, _TRUNCATE);
+
+    // OEM Logo：先读注册表，接受 %SystemRoot% 形式的路径；都没有就找 System32\oemlogo.bmp
+    {
+        wchar_t raw[512] = { 0 };
+        RegReadStr(HKEY_LOCAL_MACHINE, kOem, L"Logo", raw, 512);
+        if (raw[0]) {
+            wchar_t expanded[512] = { 0 };
+            ExpandEnvironmentStringsW(raw, expanded, 512);
+            if (FileExistsW(expanded))
+                wcsncpy_s(t->logoFile, 512, expanded, _TRUNCATE);
+        }
+        if (!t->logoFile[0]) {
+            wchar_t sys[MAX_PATH] = { 0 };
+            GetSystemDirectoryW(sys, MAX_PATH);
+            wcscat_s(sys, MAX_PATH, L"\\oemlogo.bmp");
+            if (FileExistsW(sys))
+                wcsncpy_s(t->logoFile, 512, sys, _TRUNCATE);
+        }
+    }
+
+    const wchar_t* kCv = L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+    RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"ProductName", t->osName, 192);
+    RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"EditionID", t->edition, 128);
+    RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"CurrentVersion", t->kernel, 32);
+    RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"DisplayVersion", t->releaseId, 32);
+    if (!t->releaseId[0])
+        RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"ReleaseId", t->releaseId, 32);
+    RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"CurrentBuildNumber", t->build, 32);
+    RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"BuildLabEx", t->lab, 160);
+    RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"RegisteredOwner", t->regUser, 128);
+    RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"RegisteredOrganization", t->regOrg, 128);
+
+    DWORD ubr = RegReadDword(HKEY_LOCAL_MACHINE, kCv, L"UBR");
+    if (ubr)
+        WPrintf(t->ubr, 16, L"%lu", ubr);
+
+    // 安装日期：InstallDate 是 Unix 秒
+    {
+        DWORD ts = RegReadDword(HKEY_LOCAL_MACHINE, kCv, L"InstallDate");
+        if (ts) {
+            __time64_t tt = (__time64_t)ts;
+            struct tm lt;
+            if (_localtime64_s(&lt, &tt) == 0)
+                WPrintf(t->installDate, 64, L"%04d/%02d/%02d %02d:%02d:%02d",
+                    lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday,
+                    lt.tm_hour, lt.tm_min, lt.tm_sec);
+        }
+    }
+
+    // 位数
+    {
+        SYSTEM_INFO sysInfo;
+        GetNativeSystemInfo(&sysInfo);
+        wcscpy_s(t->arch, 32,
+            sysInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64 ? L"64 位"
+            : sysInfo.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64 ? L"ARM64"
+            : L"32 位");
+    }
+
+    // 系统盘 / 计算机名 / 用户名
+    {
+        wchar_t win[MAX_PATH] = { 0 };
+        GetWindowsDirectoryW(win, MAX_PATH);
+        wcsncpy_s(t->systemDrive, 8, win, 2);
+        t->systemDrive[2] = 0;
+    }
+    {
+        DWORD cch = 128;
+        GetComputerNameW(t->computerName, &cch);
+    }
+    {
+        DWORD cch = 128;
+        GetUserNameW(t->userName, &cch);
+    }
+
+    KnownFolderPath(FOLDERID_Desktop, t->desktop, 512);
+    KnownFolderPath(FOLDERID_Downloads, t->downloads, 512);
+    KnownFolderPath(FOLDERID_Favorites, t->favorites, 512);
+    KnownFolderPath(FOLDERID_Documents, t->documents, 512);
+    KnownFolderPath(FOLDERID_Pictures, t->pictures, 512);
+    KnownFolderPath(FOLDERID_Music, t->music, 512);
+    KnownFolderPath(FOLDERID_Videos, t->videos, 512);
+}
+
+static void WriteUtf8(FILE* f, const wchar_t* text)
+{
+    if (!text || !text[0]) return;
+    char buf[4096];
+    int n = WideCharToMultiByte(CP_UTF8, 0, text, -1, buf, (int)sizeof(buf), NULL, NULL);
+    if (n > 1) fwrite(buf, 1, (size_t)(n - 1), f);
+}
+
+// 把目标信息写成一份可读的 txt（「保存所有信息」与 --dump-info 共用）
+static bool SaveTargetInfo(const wchar_t* path, const TargetInfo* t)
+{
+    FILE* f = NULL;
+    if (_wfopen_s(&f, path, L"wb") != 0 || !f) return false;
+    fwrite("\xEF\xBB\xBF", 1, 3, f);   // UTF-8 BOM
+
+    wchar_t line[1024];
+    WriteUtf8(f, L"目标系统信息查看与资料保存\r\n");
+    WriteUtf8(f, L"================================================\r\n\r\n");
+    WriteUtf8(f, L"【厂商与支持】\r\n");
+#define KV(label, field) do { \
+        WPrintf(line, 1024, L"%s: %s\r\n", label, (t->field)[0] ? (t->field) : L""); \
+        WriteUtf8(f, line); \
+    } while (0)
+    KV(L"制造商", manufacturer);
+    KV(L"型号", model);
+    KV(L"电话号码", phone);
+    KV(L"网址", supportUrl);
+    KV(L"Logo位置", logoFile);
+    WriteUtf8(f, L"\r\n【系统】\r\n");
+    KV(L"系统盘符", systemDrive);
+    KV(L"计算机名", computerName);
+    KV(L"系统名称", osName);
+    KV(L"用户名称", userName);
+    KV(L"版本类别", edition);
+    KV(L"系统位数", arch);
+    KV(L"版本内核", kernel);
+    KV(L"发行号", releaseId);
+    KV(L"版本编号", build);
+    KV(L"补丁号", ubr);
+    KV(L"实验版本", lab);
+    KV(L"安装日期", installDate);
+    KV(L"注册用户", regUser);
+    KV(L"注册组织", regOrg);
+    WriteUtf8(f, L"\r\n【用户目录】\r\n");
+    KV(L"桌面路径", desktop);
+    KV(L"下载路径", downloads);
+    KV(L"收藏夹", favorites);
+    KV(L"文档路径", documents);
+    KV(L"图片路径", pictures);
+    KV(L"音乐路径", music);
+    KV(L"视频路径", videos);
+#undef KV
+    fclose(f);
+    return true;
+}
+
 static void BuildModel(void)
 {
     g_rowCount = 0;
@@ -2008,6 +2250,7 @@ static bool g_trayAdded = false;
 static UINT g_taskbarCreatedMsg = 0;
 static wchar_t g_dumpPath[MAX_PATH] = { 0 };
 static wchar_t g_settingsDumpPath[MAX_PATH] = { 0 };
+static wchar_t g_infoDumpPath[MAX_PATH] = { 0 };
 static int g_settingsDumpPage = 0;
 static bool g_openSettingsAtStart = false;
 static int g_themeOverride = -1;
@@ -3192,6 +3435,7 @@ static UINT g_setDpi = 96;
 // Effective dp->px scale for the settings window: the monitor DPI ratio,
 // possibly reduced so the window always fits the work area.
 static double g_setScale = 1.0;
+static double g_dumpZoom = 1.0;   // --zoom N: enlarge the offscreen render for icon inspection
 
 static double SettingsScale(void) { return g_setScale; }
 
@@ -3235,6 +3479,7 @@ static void SettingsLayoutFor(HMONITOR mon, UINT dpi)
         if (availH > 1.0 && 720.0 * s > availH) s = availH / 720.0;
     }
     if (s < 0.5) s = 0.5;
+    s *= g_dumpZoom;
     g_setScale = s;
     g_setW = (int)(1024.0 * s + 0.5);
     g_setH = (int)(720.0 * s + 0.5);
@@ -3261,6 +3506,11 @@ enum
     ACT_GITHUB = 50,
     ACT_COPYVER = 51,
     ACT_POS = 60,        // + 0 up / 1 down / 2 left / 3 right / 4 reset
+    ACT_SAVEINFO = 70,   // 保存所有信息
+    ACT_OPENFOLDER = 71, // 打开保存目录
+    ACT_SHOWIP = 72,     // IP 地址查看
+    ACT_HELP = 73,       // 使用说明
+    ACT_BACK = 74,       // 返回上级
 };
 
 enum { TOGGLE_CPU = 0, TOGGLE_BOARD, TOGGLE_MEM, TOGGLE_DISK, TOGGLE_GPU, TOGGLE_NET, TOGGLE_COUNT };
@@ -3543,33 +3793,46 @@ static void DrawThemeThumb(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int k
     g.DrawPath(&edge, &path);
 }
 
+// Linear icon set on a 24dp grid: strokes scale with the icon size, round caps and
+// joins, shapes kept inside a 18dp safe area. Matches the Ethereal silhouette rules
+// and sits centred in the PanDaPE-style rounded tile.
 static void DrawNavIcon(Gdiplus::Graphics& g, int kind, float x, float y, float sz,
     const Gdiplus::Color& c)
 {
-    Gdiplus::Pen pen(c, 1.4f);
+    const float u = sz / 24.0f;
+    Gdiplus::Pen pen(c, 1.8f * u);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
-    float u = sz / 24.0f;
-    if (kind == 0) {  // look: circle with four dots
-        g.DrawEllipse(&pen, x + 3 * u, y + 3 * u, 18 * u, 18 * u);
-        Gdiplus::SolidBrush dot(c);
-        float pts[4][2] = { { 8.5f, 9 }, { 15.5f, 8 }, { 9.5f, 15.5f }, { 16, 14 } };
-        for (int i = 0; i < 4; i++)
-            g.FillEllipse(&dot, x + (pts[i][0] - 1.1f) * u, y + (pts[i][1] - 1.1f) * u,
-                2.2f * u, 2.2f * u);
-    } else if (kind == 1) {  // list
-        g.DrawLine(&pen, x + 9 * u, y + 6 * u, x + 20 * u, y + 6 * u);
-        g.DrawLine(&pen, x + 9 * u, y + 12 * u, x + 20 * u, y + 12 * u);
-        g.DrawLine(&pen, x + 9 * u, y + 18 * u, x + 20 * u, y + 18 * u);
-        Gdiplus::SolidBrush dot(c);
+    Gdiplus::SolidBrush dot(c);
+
+    if (kind == 0) {
+        // 外观：调色板（圆盘 + 右下拇指孔缺口 + 三枚颜料点）
+        g.DrawArc(&pen, x + 3.4f * u, y + 3.4f * u, 17.2f * u, 17.2f * u, 54.0f, 342.0f);
+        const float pts[3][2] = { { 9.0f, 9.3f }, { 9.7f, 15.0f }, { 14.6f, 9.6f } };
         for (int i = 0; i < 3; i++)
-            g.FillEllipse(&dot, x + 3.4f * u, y + (6 + i * 6 - 1.2f) * u, 2.4f * u, 2.4f * u);
-    } else {  // info
-        g.DrawEllipse(&pen, x + 3 * u, y + 3 * u, 18 * u, 18 * u);
-        g.DrawLine(&pen, x + 12 * u, y + 10.5f * u, x + 12 * u, y + 16.5f * u);
-        Gdiplus::SolidBrush dot(c);
-        g.FillEllipse(&dot, x + 10.8f * u, y + 6.6f * u, 2.4f * u, 2.4f * u);
+            g.FillEllipse(&dot, x + (pts[i][0] - 1.5f) * u, y + (pts[i][1] - 1.5f) * u,
+                3.0f * u, 3.0f * u);
+    } else if (kind == 1) {
+        // 显示内容：条目列表（圆点 + 行）
+        const float rows[3] = { 7.0f, 12.0f, 17.0f };
+        for (int i = 0; i < 3; i++) {
+            g.FillEllipse(&dot, x + 4.2f * u, y + (rows[i] - 1.5f) * u, 3.0f * u, 3.0f * u);
+            g.DrawLine(&pen, x + 9.8f * u, y + rows[i] * u, x + 19.6f * u, y + rows[i] * u);
+        }
+    } else if (kind == 3) {
+        // 系统信息：显示器
+        Gdiplus::GraphicsPath scr;
+        AddRoundRect(scr, Gdiplus::RectF(x + 3.2f * u, y + 4.4f * u, 17.6f * u, 12.4f * u),
+            2.6f * u);
+        g.DrawPath(&pen, &scr);
+        g.DrawLine(&pen, x + 12.0f * u, y + 16.8f * u, x + 12.0f * u, y + 19.4f * u);
+        g.DrawLine(&pen, x + 8.6f * u, y + 19.4f * u, x + 15.4f * u, y + 19.4f * u);
+    } else {
+        // 关于：信息圆
+        g.DrawEllipse(&pen, x + 4.0f * u, y + 4.0f * u, 16.0f * u, 16.0f * u);
+        g.FillEllipse(&dot, x + 10.6f * u, y + 6.1f * u, 2.9f * u, 2.9f * u);
+        g.DrawLine(&pen, x + 12.0f * u, y + 11.2f * u, x + 12.0f * u, y + 16.4f * u);
     }
 }
 
@@ -3577,65 +3840,87 @@ static void DrawNavIcon(Gdiplus::Graphics& g, int kind, float x, float y, float 
 // Pages
 // ---------------------------------------------------------------------------
 
+// Tiny filled triangle, used for the four move arrows.
+static void FillTri(Gdiplus::Graphics& g, const Gdiplus::Color& c,
+    float x1, float y1, float x2, float y2, float x3, float y3)
+{
+    Gdiplus::PointF pts[3] = {
+        Gdiplus::PointF(x1, y1), Gdiplus::PointF(x2, y2), Gdiplus::PointF(x3, y3)
+    };
+    Gdiplus::SolidBrush b(c);
+    g.FillPolygon(&b, pts, 3);
+}
+
 // Circular icon chip used on every settings row (PanDa-style).
 static void DrawRowIcon(Gdiplus::Graphics& g, int kind, float cx, float cy,
     float r, const Palette& pal)
 {
     Gdiplus::SolidBrush bg(pal.chipBg);
     g.FillEllipse(&bg, cx - r, cy - r, r * 2, r * 2);
-    Gdiplus::Pen pen(pal.chipFg, 1.5f);
+
+    const float u = r / 10.5f;          // 24dp grid, icon fills ~2/3 of the chip
+    Gdiplus::Pen pen(pal.chipFg, 1.8f * u);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
-    float u = r / 12.0f;
+    const Gdiplus::Color fg = pal.chipFg;
+
     switch (kind) {
-    case 0:   // light/dark: contrast circle
-        g.DrawEllipse(&pen, cx - 7 * u, cy - 7 * u, 14 * u, 14 * u);
-        {
-            Gdiplus::GraphicsPath half;
-            half.AddArc(cx - 7 * u, cy - 7 * u, 14 * u, 14 * u, -90.0f, 180.0f);
-            Gdiplus::SolidBrush fill(pal.chipFg);
-            g.FillPath(&fill, &half);
-        }
+    case 0: {   // 明暗模式：对比圆（右半实心）
+        const float rr = 7.2f * u;
+        g.DrawEllipse(&pen, cx - rr, cy - rr, rr * 2, rr * 2);
+        Gdiplus::GraphicsPath half;
+        half.AddArc(cx - rr, cy - rr, rr * 2, rr * 2, -90.0f, 180.0f);
+        half.CloseFigure();
+        Gdiplus::SolidBrush fill(fg);
+        g.FillPath(&fill, &half);
         break;
-    case 1:   // hue: palette droplet
-        g.DrawEllipse(&pen, cx - 7 * u, cy - 7 * u, 14 * u, 14 * u);
-        {
-            Gdiplus::SolidBrush dot(pal.chipFg);
-            g.FillEllipse(&dot, cx - 3.2f * u, cy - 3.2f * u, 6.4f * u, 6.4f * u);
-        }
+    }
+    case 1: {   // 主题色相：色环 + 顶部实心标记（当前色相位置）
+        const float rr = 6.6f * u;
+        Gdiplus::Pen ring(fg, 1.8f * u);
+        g.DrawEllipse(&ring, cx - rr, cy - rr, rr * 2, rr * 2);
+        Gdiplus::SolidBrush marker(fg);
+        g.FillEllipse(&marker, cx - 1.8f * u, cy - rr - 1.7f * u, 3.6f * u, 3.6f * u);
         break;
-    case 2:   // radius: rounded square
-        {
-            Gdiplus::GraphicsPath sq;
-            AddRoundRect(sq, Gdiplus::RectF(cx - 7 * u, cy - 7 * u, 14 * u, 14 * u), 5 * u);
-            g.DrawPath(&pen, &sq);
-        }
+    }
+    case 2: {   // 圆角：一个被磨圆的角（L 形 + 大圆弧）
+        Gdiplus::GraphicsPath corner;
+        corner.AddLine(cx - 4.4f * u, cy + 7.6f * u, cx - 4.4f * u, cy + 1.2f * u);
+        corner.AddArc(cx - 4.4f * u, cy - 5.6f * u, 13.2f * u, 13.2f * u, 180.0f, 90.0f);
+        corner.AddLine(cx + 2.2f * u, cy - 5.6f * u, cx + 7.6f * u, cy - 5.6f * u);
+        Gdiplus::Pen thick(fg, 2.0f * u);
+        thick.SetLineJoin(Gdiplus::LineJoinRound);
+        thick.SetStartCap(Gdiplus::LineCapRound);
+        thick.SetEndCap(Gdiplus::LineCapRound);
+        g.DrawPath(&thick, &corner);
         break;
-    case 3:   // opacity: two stacked sheets
-        {
-            Gdiplus::GraphicsPath s1;
-            AddRoundRect(s1, Gdiplus::RectF(cx - 7 * u, cy - 5.5f * u, 10 * u, 10 * u), 2.5f * u);
-            g.DrawPath(&pen, &s1);
-            Gdiplus::GraphicsPath s2;
-            AddRoundRect(s2, Gdiplus::RectF(cx - 2.5f * u, cy - 8 * u, 10 * u, 10 * u), 2.5f * u);
-            Gdiplus::SolidBrush fill(pal.chipBg);
-            g.FillPath(&fill, &s2);
-            g.DrawPath(&pen, &s2);
-        }
+    }
+    case 3: {   // 卡片不透明度：两张错位卡片，重叠区加深
+        Gdiplus::GraphicsPath back;
+        AddRoundRect(back, Gdiplus::RectF(cx - 7.6f * u, cy - 7.6f * u, 10.8f * u, 10.8f * u),
+            3.0f * u);
+        g.DrawPath(&pen, &back);
+
+        Gdiplus::GraphicsPath front;
+        AddRoundRect(front, Gdiplus::RectF(cx - 3.2f * u, cy - 3.2f * u, 10.8f * u, 10.8f * u),
+            3.0f * u);
+        Gdiplus::SolidBrush soft(Gdiplus::Color(132, fg.GetR(), fg.GetG(), fg.GetB()));
+        g.FillPath(&soft, &front);
+        g.DrawPath(&pen, &front);
         break;
-    default:  // position: four-way move arrows
-        g.DrawLine(&pen, cx - 7 * u, cy, cx + 7 * u, cy);
-        g.DrawLine(&pen, cx, cy - 7 * u, cx, cy + 7 * u);
-        g.DrawLine(&pen, cx - 7 * u, cy, cx - 4 * u, cy - 3 * u);
-        g.DrawLine(&pen, cx - 7 * u, cy, cx - 4 * u, cy + 3 * u);
-        g.DrawLine(&pen, cx + 7 * u, cy, cx + 4 * u, cy - 3 * u);
-        g.DrawLine(&pen, cx + 7 * u, cy, cx + 4 * u, cy + 3 * u);
-        g.DrawLine(&pen, cx, cy - 7 * u, cx - 3 * u, cy - 4 * u);
-        g.DrawLine(&pen, cx, cy - 7 * u, cx + 3 * u, cy - 4 * u);
-        g.DrawLine(&pen, cx, cy + 7 * u, cx - 3 * u, cy + 4 * u);
-        g.DrawLine(&pen, cx, cy + 7 * u, cx + 3 * u, cy + 4 * u);
+    }
+    default: {  // 显示位置：十字 + 四向实心箭头
+        const float e = 4.6f * u;
+        g.DrawLine(&pen, cx - e, cy, cx + e, cy);
+        g.DrawLine(&pen, cx, cy - e, cx, cy + e);
+        const float tip = 8.0f * u, base = 4.6f * u, hw = 2.8f * u;
+        FillTri(g, fg, cx, cy - tip, cx - hw, cy - base, cx + hw, cy - base);
+        FillTri(g, fg, cx, cy + tip, cx - hw, cy + base, cx + hw, cy + base);
+        FillTri(g, fg, cx - tip, cy, cx - base, cy - hw, cx - base, cy + hw);
+        FillTri(g, fg, cx + tip, cy, cx + base, cy - hw, cx + base, cy + hw);
         break;
+    }
     }
 }
 
@@ -3971,6 +4256,177 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
 // Frame + layered push
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// 系统信息页
+// ---------------------------------------------------------------------------
+
+static TargetInfo g_ti;
+static bool g_tiReady = false;
+static wchar_t g_saveDir[MAX_PATH] = { 0 };
+
+static void EnsureSaveDir(void)
+{
+    if (g_saveDir[0]) return;
+    wchar_t docs[MAX_PATH] = { 0 };
+    KnownFolderPath(FOLDERID_Documents, docs, MAX_PATH);
+    if (!docs[0]) return;
+    WPrintf(g_saveDir, MAX_PATH, L"%s\\HSpec", docs);
+    CreateDirectoryW(g_saveDir, NULL);
+}
+
+static void GetLocalIpText(wchar_t* out, int cch)
+{
+    if (!out || cch <= 0) return;
+    out[0] = 0;
+    ULONG size = 0;
+    const DWORD flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
+    if (GetAdaptersAddresses(AF_INET, flags, NULL, NULL, &size) != ERROR_BUFFER_OVERFLOW || !size)
+        return;
+    IP_ADAPTER_ADDRESSES* addrs = (IP_ADAPTER_ADDRESSES*)malloc(size);
+    if (!addrs) return;
+    if (GetAdaptersAddresses(AF_INET, flags, NULL, addrs, &size) == NO_ERROR) {
+        for (IP_ADAPTER_ADDRESSES* a = addrs; a && !out[0]; a = a->Next) {
+            if (a->OperStatus != IfOperStatusUp) continue;
+            if (a->IfType == IF_TYPE_SOFTWARE_LOOPBACK) continue;
+            for (IP_ADAPTER_UNICAST_ADDRESS* u = a->FirstUnicastAddress; u; u = u->Next) {
+                if (!u->Address.lpSockaddr) continue;
+                if (u->Address.lpSockaddr->sa_family != AF_INET) continue;
+                wchar_t ip[64] = { 0 };
+                FormatIpv4(u->Address.lpSockaddr, ip, 64);
+                if (ip[0]) {
+                    wcsncpy_s(out, cch, ip, _TRUNCATE);
+                    break;
+                }
+            }
+        }
+    }
+    free(addrs);
+}
+
+static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
+    float x, float y, float w, float s)
+{
+    if (!g_tiReady) {
+        CollectTargetInfo(&g_ti);
+        g_tiReady = true;
+    }
+    const TargetInfo& t = g_ti;
+    const float rowH = 23 * s;
+    const float keyW = 78 * s;
+    const float pad = 18 * s;
+
+    // ---------------- 厂商卡 ----------------
+    const float c1h = 148 * s;
+    FillRound(g, MRect(x, y, w, c1h), 16 * s, pal.card);
+
+    Gdiplus::RectF slot(x + pad, y + pad, 116 * s, c1h - pad * 2);
+    FillRound(g, slot, 12 * s, pal.chipBg);
+    bool drew = false;
+    if (t.logoFile[0]) {
+        Gdiplus::Bitmap bmp(t.logoFile);
+        if (bmp.GetLastStatus() == Gdiplus::Ok && bmp.GetWidth() > 0 && bmp.GetHeight() > 0) {
+            float iw = (float)bmp.GetWidth(), ih = (float)bmp.GetHeight();
+            float maxW = slot.Width - 18 * s, maxH = slot.Height - 18 * s;
+            float k = maxW / iw;
+            if (ih * k > maxH) k = maxH / ih;
+            float dw = iw * k, dh = ih * k;
+            g.DrawImage(&bmp, Gdiplus::RectF(slot.X + (slot.Width - dw) * 0.5f,
+                slot.Y + (slot.Height - dh) * 0.5f, dw, dh));
+            drew = true;
+        }
+    }
+    if (!drew) {
+        SText(g, t.manufacturer[0] ? t.manufacturer : L"OEM", 15, FW_NORMAL, pal.detail, light,
+            slot.X + 6 * s, slot.Y, slot.Width - 12 * s, slot.Height,
+            DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    }
+
+    {
+        float kx = slot.GetRight() + 16 * s;
+        float vw = x + w - pad - (kx + keyW + 10 * s);
+        struct KV { const wchar_t* k; const wchar_t* v; };
+        const KV rows[5] = {
+            { L"制造商", t.manufacturer },
+            { L"型号", t.model },
+            { L"电话号码", t.phone },
+            { L"网址", t.supportUrl },
+            { L"Logo位置", t.logoFile },
+        };
+        float ky = y + pad;
+        for (int i = 0; i < 5; i++) {
+            SText(g, rows[i].k, 13.5f, FW_NORMAL, pal.detail, light,
+                kx, ky + i * rowH, keyW, rowH);
+            SText(g, rows[i].v, 13.5f, FW_NORMAL, pal.title, light,
+                kx + keyW + 10 * s, ky + i * rowH, vw, rowH);
+        }
+    }
+
+    // ---------------- 两列信息卡 ----------------
+    const float c2y = y + c1h + 12 * s;
+    const float c2h = 11 * rowH + pad * 2;
+    FillRound(g, MRect(x, c2y, w, c2h), 16 * s, pal.card);
+
+    struct KV2 { const wchar_t* k; const wchar_t* v; };
+    const KV2 leftCol[9] = {
+        { L"系统盘符", t.systemDrive },
+        { L"用户名称", t.userName },
+        { L"桌面路径", t.desktop },
+        { L"下载路径", t.downloads },
+        { L"收藏夹", t.favorites },
+        { L"文档路径", t.documents },
+        { L"图片路径", t.pictures },
+        { L"音乐路径", t.music },
+        { L"视频路径", t.videos },
+    };
+    const KV2 rightCol[11] = {
+        { L"系统名称", t.osName },
+        { L"计算机名", t.computerName },
+        { L"版本类别", t.edition },
+        { L"系统位数", t.arch },
+        { L"版本内核", t.kernel },
+        { L"发行号", t.releaseId },
+        { L"版本编号", t.build },
+        { L"补丁号", t.ubr },
+        { L"实验版本", t.lab },
+        { L"安装日期", t.installDate },
+        { L"注册用户", t.regUser },
+    };
+
+    const float inner = w - pad * 2;
+    const float colGap = 18 * s;
+    const float leftW = inner * 0.46f - colGap * 0.5f;
+    const float rightX = x + pad + leftW + colGap;
+    const float rightW = inner - leftW - colGap;
+    const float lk = 66 * s;
+    const float rk = 76 * s;
+
+    for (int i = 0; i < 9; i++) {
+        float ry = c2y + pad + i * rowH;
+        SText(g, leftCol[i].k, 13, FW_NORMAL, pal.detail, light, x + pad, ry, lk, rowH);
+        SText(g, leftCol[i].v, 13, FW_NORMAL, pal.title, light, x + pad + lk + 4 * s, ry,
+            leftW - lk - 4 * s, rowH);
+    }
+    for (int i = 0; i < 11; i++) {
+        float ry = c2y + pad + i * rowH;
+        SText(g, rightCol[i].k, 13, FW_NORMAL, pal.detail, light, rightX, ry, rk, rowH);
+        SText(g, rightCol[i].v, 13, FW_NORMAL, pal.title, light, rightX + rk, ry,
+            rightW - rk, rowH);
+    }
+
+    // ---------------- 按钮行 ----------------
+    const float btnY = c2y + c2h + 14 * s;
+    const float btnH = 40 * s;
+    const float gap = 10 * s;
+    const float btnW = (w - gap * 4) / 5.0f;
+    const wchar_t* labels[5] = { L"IP 地址查看", L"保存所有信息", L"打开保存目录",
+                                 L"使用说明", L"返回上级" };
+    const int acts[5] = { ACT_SHOWIP, ACT_SAVEINFO, ACT_OPENFOLDER, ACT_HELP, ACT_BACK };
+    for (int i = 0; i < 5; i++) {
+        Gdiplus::RectF b(x + i * (btnW + gap), btnY, btnW, btnH);
+        DrawTextButton(g, b, labels[i], pal, light, g_setHot == acts[i], acts[i]);
+    }
+}
+
 static void SettingsDraw(Gdiplus::Graphics& g)
 {
     double s = SettingsScale();
@@ -4009,8 +4465,8 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     // ---- sidebar: icon tiles (PanDa-style rail) ----
     float navX = 20 * (float)s;
     float navY = 84 * (float)s;
-    const wchar_t* navNames[3] = { L"外观", L"显示内容", L"关于" };
-    for (int i = 0; i < 3; i++) {
+    const wchar_t* navNames[4] = { L"外观", L"显示内容", L"系统信息", L"关于" };
+    for (int i = 0; i < 4; i++) {
         float tileY = navY + i * 86 * s;
         bool on = (g_setPage == i);
         Gdiplus::RectF tile(navX, tileY, 200 * s, 78 * s);
@@ -4022,7 +4478,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
             : pal.chipBg;
         FillRound(g, chip, 12 * s, chipFill);
         Gdiplus::Color fg = on ? Gdiplus::Color(255, 255, 255, 255) : pal.chipFg;
-        DrawNavIcon(g, i == 2 ? 2 : i, chip.X + 11 * s, chip.Y + 11 * s, 22 * s, fg);
+        DrawNavIcon(g, i == 3 ? 2 : (i == 2 ? 3 : i), chip.X + 10 * s, chip.Y + 10 * s, 24 * s, fg);
         SText(g, navNames[i], 14, FW_NORMAL, on ? pal.itemFg : pal.detail, light,
             navX + 76 * s, tileY, 116 * s, 78 * s);
         HitAdd((int)tile.X, (int)tile.Y, (int)tile.Width, (int)tile.Height, ACT_NAV + i);
@@ -4039,13 +4495,17 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     float cwp = page.Width - 240 * s - 32 * s;
 
     // page heading with the theme's accent bar
-    const wchar_t* titles[3] = { L"外观", L"显示内容", L"关于" };
-    if (g_setPage != 2) {
+    const wchar_t* titles[4] = { L"外观", L"显示内容", L"系统信息", L"关于" };
+    if (g_setPage != 3) {
         FillRound(g, MRect(cxp, cyp + 6 * s, 4 * s, 24 * s), 2 * s, pal.primary);
         SText(g, titles[g_setPage], 24, FW_NORMAL, pal.title, light, cxp + 16 * s, cyp,
             cwp - 16 * s, 32 * s);
-        SText(g, g_setPage == 0 ? L"面板画在桌面层上，这里决定它离壁纸有多近"
-                                : L"关掉的项目不再出现在面板上",
+        const wchar_t* subs[3] = {
+            L"面板画在桌面层上，这里决定它离壁纸有多近",
+            L"关掉的项目不再出现在面板上",
+            L"本机的厂商、系统与用户目录，可一键保存成资料",
+        };
+        SText(g, subs[g_setPage < 3 ? g_setPage : 2],
             14, FW_NORMAL, pal.detail, light, cxp + 16 * s, cyp + 34 * s,
             cwp - 16 * s, 20 * s);
         cyp += 68 * s;
@@ -4053,6 +4513,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
 
     if (g_setPage == 0) PageLook(g, pal, light, cxp, cyp, cwp, (float)s);
     else if (g_setPage == 1) PageContent(g, pal, light, cxp, cyp, cwp, (float)s);
+    else if (g_setPage == 2) PageSystem(g, pal, light, cxp, cyp, cwp, (float)s);
     else PageAbout(g, pal, light, cxp, cyp + 30 * s, cwp, (float)s);
 }
 
@@ -4184,6 +4645,40 @@ static void PerformAction(int act)
     } else if (act == ACT_CLOSE) {
         PostMessageW(g_setHwnd, WM_CLOSE, 0, 0);
         return;
+    } else if (act == ACT_BACK) {
+        g_setPage = 0;
+    } else if (act == ACT_SAVEINFO) {
+        if (!g_tiReady) { CollectTargetInfo(&g_ti); g_tiReady = true; }
+        EnsureSaveDir();
+        SYSTEMTIME st;
+        GetLocalTime(&st);
+        wchar_t path[MAX_PATH] = { 0 };
+        WPrintf(path, MAX_PATH, L"%s\\系统信息_%04d%02d%02d_%02d%02d%02d.txt",
+            g_saveDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        if (SaveTargetInfo(path, &g_ti))
+            MessageBoxW(g_setHwnd, path, L"已保存", MB_ICONINFORMATION | MB_OK);
+        else
+            MessageBoxW(g_setHwnd, L"保存失败，请检查「文档」目录的写入权限。",
+                L"HSpec", MB_ICONWARNING | MB_OK);
+    } else if (act == ACT_OPENFOLDER) {
+        EnsureSaveDir();
+        if (g_saveDir[0])
+            ShellExecuteW(NULL, L"open", g_saveDir, NULL, NULL, SW_SHOWNORMAL);
+    } else if (act == ACT_SHOWIP) {
+        wchar_t ip[64] = { 0 };
+        GetLocalIpText(ip, 64);
+        wchar_t msg[320] = { 0 };
+        WPrintf(msg, 320, L"本机 IPv4 地址：\n\n%s",
+            ip[0] ? ip : L"未检测到已连接的网络");
+        MessageBoxW(g_setHwnd, msg, L"IP 地址查看", MB_ICONINFORMATION | MB_OK);
+    } else if (act == ACT_HELP) {
+        MessageBoxW(g_setHwnd,
+            L"系统信息页汇总本机的厂商、系统版本与用户目录。\n\n"
+            L"· 保存所有信息：导出到「文档\\HSpec」，文件名带时间戳；\n"
+            L"· 打开保存目录：在资源管理器中打开该目录；\n"
+            L"· IP 地址查看：显示当前联网网卡的 IPv4 地址；\n"
+            L"· 返回上级：回到外观页。",
+            L"使用说明", MB_ICONINFORMATION | MB_OK);
     } else if (act == ACT_GITHUB) {
         ShellExecuteW(NULL, L"open", L"https://github.com/PanDaTech/Hydrogen-Spec", NULL, NULL,
             SW_SHOWNORMAL);
@@ -4598,6 +5093,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_APP + 2:
         if (lParam == WM_RBUTTONUP || lParam == WM_LBUTTONDBLCLK)
             ShowTrayMenu(hwnd);
+        else if (lParam == WM_LBUTTONUP) {
+            // 左键单击托盘：直接打开「系统信息」（硬件信息 + 本机资料）
+            g_setPage = 2;
+            OpenSettings();
+        }
         return 0;
 
     case WM_DEVICECHANGE:
@@ -4734,10 +5234,15 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
                 } else if (wcscmp(argv[i], L"--dump-settings") == 0 && i + 1 < argc) {
                     wcsncpy_s(g_settingsDumpPath, MAX_PATH, argv[++i], _TRUNCATE);
                 } else if (wcscmp(argv[i], L"--page") == 0 && i + 1 < argc) {
-                    g_settingsDumpPage = ClampInt(_wtoi(argv[++i]), 0, 2);
+                    g_settingsDumpPage = ClampInt(_wtoi(argv[++i]), 0, 3);
                 } else if (wcscmp(argv[i], L"--theme") == 0 && i + 1 < argc) {
                     // applied after LoadConfig(), which would overwrite it
                     g_themeOverride = ClampInt(_wtoi(argv[++i]), 0, THEME_COUNT - 1);
+                } else if (wcscmp(argv[i], L"--dump-info") == 0 && i + 1 < argc) {
+                    wcsncpy_s(g_infoDumpPath, MAX_PATH, argv[++i], _TRUNCATE);
+                } else if (wcscmp(argv[i], L"--zoom") == 0 && i + 1 < argc) {
+                    double z = _wtof(argv[++i]);
+                    g_dumpZoom = (z >= 1.0 && z <= 4.0) ? z : 1.0;
                 } else if (wcscmp(argv[i], L"--settings") == 0) {
                     g_openSettingsAtStart = true;
                 }
@@ -4790,6 +5295,13 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     AddTrayIcon(g_hwnd, hInstance);
 
     if (g_openSettingsAtStart) OpenSettings();
+
+    if (g_infoDumpPath[0]) {
+        TargetInfo ti;
+        CollectTargetInfo(&ti);
+        bool ok = SaveTargetInfo(g_infoDumpPath, &ti);
+        return ok ? 0 : 1;
+    }
 
     if (g_settingsDumpPath[0] && !g_dumpPath[0]) {
         POINT origin0 = { 0, 0 };
