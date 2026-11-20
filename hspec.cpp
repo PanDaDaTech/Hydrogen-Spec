@@ -3982,19 +3982,18 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
 
     // --- 主题 ---
     const wchar_t* names[3] = { L"纯文字", L"卡片", L"分离卡片" };
-    float gap = 16 * s;
+    float gap = 14 * s;
     float tileW = (w - 40 * s - 2 * gap) / 3.0f;
-    float thumbH = tileW * 72.0f / 161.0f;
-    if (thumbH > 92 * s) thumbH = 92 * s;
-    float cardH1 = pad + 22 * s + 26 * s + thumbH + 6 * s + 22 * s + pad;
+    float thumbH = tileW * 84.0f / 161.0f;
+    float cardH1 = pad + 26 * s + 30 * s + thumbH + 8 * s + 24 * s + pad;
     Gdiplus::RectF cardC1(x, y, w, cardH1);
     FillRound(g, cardC1, 14 * s, pal.card);
     float cy = y + pad;
     SText(g, L"主题", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy, w - 40 * s, 24 * s);
-    cy += 22 * s;
-    SText(g, L"同一个信息模型，三种渲染层", 13.5f, FW_NORMAL, sub, light,
-        x + 20 * s, cy, w - 40 * s, 18 * s);
     cy += 26 * s;
+    SText(g, L"同一个信息模型，三种渲染层", 14, FW_NORMAL, sub, light,
+        x + 20 * s, cy, w - 40 * s, 20 * s);
+    cy += 30 * s;
     for (int i = 0; i < 3; i++) {
         float tx = x + 20 * s + i * (tileW + gap);
         Gdiplus::RectF thumb(tx, cy, tileW, thumbH);
@@ -4006,134 +4005,76 @@ static void PageLook(Gdiplus::Graphics& g, const Palette& pal, bool light,
                 thumb.Width + 5 * s, thumb.Height + 5 * s), 13 * s);
             g.DrawPath(&ring, &p);
         }
-        // selected state is the ring around the thumb + accent caption
-        Gdiplus::Color capColor = (g_cfg.theme == i) ? pal.primary : sub;
-        SText(g, names[i], 13.5f, FW_NORMAL, capColor, light,
-            tx, cy + thumbH + 6 * s, tileW, 22 * s,
-            DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-        HitAdd((int)tx, (int)thumb.Y, (int)tileW, (int)(thumb.Height + 28 * s), ACT_THEME + i);
+        Gdiplus::Color capColor = (g_cfg.theme == i) ? pal.itemFg : sub;
+        SText(g, names[i], 14, FW_NORMAL, capColor, light,
+            tx, cy + thumbH + 8 * s, tileW - 22 * s, 22 * s);
+        // radio dot
+        float dotR = 6.5f * s;
+        float dx = tx + tileW - dotR * 2, dy = cy + thumbH + 8 * s + (22 * s - dotR * 2) * 0.5f;
+        Gdiplus::Pen dotPen((g_cfg.theme == i) ? pal.primary : pal.chipBg, 1.8f * s);
+        g.DrawEllipse(&dotPen, dx, dy, dotR * 2, dotR * 2);
+        if (g_cfg.theme == i) {
+            Gdiplus::SolidBrush dotB(pal.primary);
+            g.FillEllipse(&dotB, dx + 3.5f * s, dy + 3.5f * s, dotR * 2 - 7 * s, dotR * 2 - 7 * s);
+        }
+        HitAdd((int)tx, (int)thumb.Y, (int)tileW, (int)(thumb.Height + 32 * s), ACT_THEME + i);
     }
 
-    // --- 取色与明暗（one card, icon rows） ---
-    float y2 = cardC1.GetBottom() + 12 * s;
-    float rowsH = 44 * s + 58 * s + 44 * s + 44 * s;
-    Gdiplus::RectF cardC2(x, y2, w, pad * 2 + rowsH);
+    // --- 主色 ---
+    float y2 = cardC1.GetBottom() + 14 * s;
+    Gdiplus::RectF cardC2(x, y2, w, 172 * s);
     FillRound(g, cardC2, 14 * s, pal.card);
-    float ry = y2 + pad;
+    float cy2 = y2 + pad;
+    SText(g, L"主色", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy2, w - 40 * s, 24 * s);
+    cy2 += 28 * s;
 
-    // 明暗模式
-    DrawRowIcon(g, 0, x + 20 * s + 15 * s, ry + 15 * s, 15 * s, pal);
-    SText(g, L"明暗模式", 15, FW_NORMAL, pal.title, light, x + 62 * s, ry,
-        160 * s, 30 * s);
-    const wchar_t* lightLabels[3] = { L"跟随系统", L"浅色", L"深色" };
-    Gdiplus::RectF seg(x + w - 20 * s - 300 * s, ry + 1 * s, 300 * s, 28 * s);
-    DrawSegmented(g, seg, lightLabels, 3, g_cfg.lightMode, pal, light, ACT_LIGHT);
-    ry += 44 * s;
+    SText(g, L"跟随壁纸取色", 15, FW_NORMAL, pal.title, light, x + 20 * s, cy2,
+        w - 140 * s, 22 * s);
+    SText(g, L"从壁纸采样主色，换算成 oklch 的 hue", 13.5f, FW_NORMAL, sub, light,
+        x + 20 * s, cy2 + 22 * s, w - 140 * s, 18 * s);
+    Gdiplus::RectF sw(x + w - 20 * s - 44 * s, cy2 + 2 * s, 44 * s, 24 * s);
+    DrawSwitch(g, sw, g_cfg.hueFollow != 0, pal);
+    HitAdd((int)sw.X, (int)sw.Y, (int)sw.Width, (int)sw.Height, ACT_HUE_FOLLOW);
 
-    // 主题色相: swatches then slider
-    DrawRowIcon(g, 1, x + 20 * s + 15 * s, ry + 15 * s, 15 * s, pal);
-    SText(g, L"主题色相", 15, FW_NORMAL, pal.title, light, x + 62 * s, ry,
-        160 * s, 30 * s);
-    {
-        static const int kHueSwatch[5] = { 250, 190, 160, 300, 20 };
-        float swY = ry + 2 * s;
-        float swSz = 26 * s, swGap = 10 * s;
-        float sx = x + 232 * s;
-        {
-            Gdiplus::RectF chip(sx, swY, swSz, swSz);
-            Gdiplus::LinearGradientBrush gb(Gdiplus::PointF(chip.X, chip.Y),
-                Gdiplus::PointF(chip.GetRight(), chip.GetBottom()),
-                Gdiplus::Color(255, 84, 110, 158), Gdiplus::Color(255, 214, 158, 96));
-            Gdiplus::GraphicsPath cp;
-            AddRoundRect(cp, chip, 8 * s);
-            g.FillPath(&gb, &cp);
-            if (g_cfg.hueFollow) {
-                Gdiplus::Pen ring(pal.primary, 2.0f * s);
-                Gdiplus::GraphicsPath rp;
-                AddRoundRect(rp, Gdiplus::RectF(chip.X - 2.5f * s, chip.Y - 2.5f * s,
-                    chip.Width + 5 * s, chip.Height + 5 * s), 10 * s);
-                g.DrawPath(&ring, &rp);
-            }
-            HitAdd((int)chip.X - 4, (int)chip.Y - 4, (int)chip.Width + 8, (int)chip.Height + 8,
-                ACT_SWATCH + 0);
-        }
-        sx += swSz + swGap;
-        for (int i = 0; i < 5; i++) {
-            Gdiplus::RectF chip(sx, swY, swSz, swSz);
-            Gdiplus::Color c = OklchColor(0.70, 0.13, (double)kHueSwatch[i], 255);
-            Gdiplus::SolidBrush cb(c);
-            Gdiplus::GraphicsPath cp;
-            AddRoundRect(cp, chip, 8 * s);
-            g.FillPath(&cb, &cp);
-            bool on = (!g_cfg.hueFollow && g_cfg.hue == kHueSwatch[i]);
-            if (on) {
-                Gdiplus::Pen ring(pal.primary, 2.0f * s);
-                Gdiplus::GraphicsPath rp;
-                AddRoundRect(rp, Gdiplus::RectF(chip.X - 2.5f * s, chip.Y - 2.5f * s,
-                    chip.Width + 5 * s, chip.Height + 5 * s), 10 * s);
-                g.DrawPath(&ring, &rp);
-            }
-            HitAdd((int)chip.X - 4, (int)chip.Y - 4, (int)chip.Width + 8, (int)chip.Height + 8,
-                ACT_SWATCH + 1 + i);
-            sx += swSz + swGap;
-        }
-    }
-    ry += 32 * s;
-    {
-        wchar_t hueText[32];
-        WPrintf(hueText, 32, L"%d °", HueDeg());
-        Gdiplus::RectF huePill(x + w - 20 * s - 72 * s, ry - 2 * s, 72 * s, 26 * s);
-        DrawValuePill(g, huePill, hueText, pal, light);
-        Gdiplus::RectF hue(x + 232 * s, ry + 5 * s,
-            (huePill.X - 14 * s) - (x + 232 * s), 14 * s);
-        DrawHueStrip(g, hue, (float)HueDeg(), pal);
-        g_hueTrack = RECT{ (LONG)hue.X, (LONG)hue.Y, (LONG)hue.GetRight(), (LONG)hue.GetBottom() };
-        HitAdd((int)hue.X - 4, (int)ry - 6, (int)hue.Width + 8, (int)32 * s, ACT_HUE_STRIP);
-    }
-    ry += 44 * s;
+    float hueY = cy2 + 52 * s;
+    Gdiplus::RectF hue(x + 20 * s, hueY, w - 40 * s, 22 * s);
+    DrawHueStrip(g, hue, (float)HueDeg(), pal);
+    g_hueTrack = RECT{ (LONG)hue.X, (LONG)hue.Y, (LONG)hue.GetRight(), (LONG)hue.GetBottom() };
+    HitAdd((int)hue.X - 4, (int)hue.Y - 6, (int)hue.Width + 8, (int)hue.Height + 12, ACT_HUE_STRIP);
 
-    // 卡片不透明度 + 圆角
-    struct { const wchar_t* name; int icon; int value; int act; int minV; int maxV; const wchar_t* unit; } rows[2] = {
-        { L"卡片不透明度", 3, g_cfg.opacity, ACT_OPACITY, 40, 100, L"%" },
-        { L"圆角", 2, g_cfg.radius, ACT_RADIUS, 0, 24, L"px" },
+    wchar_t hueText[64];
+    WPrintf(hueText, 64, L"Hue %d · %s", HueDeg(),
+        g_cfg.hueFollow ? L"取自壁纸" : L"手动");
+    SText(g, hueText, 13.5f, FW_NORMAL, sub, light, x + 20 * s, hueY + 30 * s,
+        w - 120 * s, 18 * s);
+
+    // --- 面板 ---
+    float y3 = cardC2.GetBottom() + 14 * s;
+    Gdiplus::RectF cardC3(x, y3, w, 150 * s);
+    FillRound(g, cardC3, 14 * s, pal.card);
+    float cy3 = y3 + pad;
+    SText(g, L"面板", 18, FW_NORMAL, pal.title, light, x + 20 * s, cy3, w - 40 * s, 24 * s);
+    cy3 += 32 * s;
+
+    struct { const wchar_t* name; int value; int act; int minV; int maxV; const wchar_t* unit; } rows[2] = {
+        { L"卡片不透明度", g_cfg.opacity, ACT_OPACITY, 40, 100, L"%" },
+        { L"圆角", g_cfg.radius, ACT_RADIUS, 0, 24, L"px" },
     };
     for (int i = 0; i < 2; i++) {
-        DrawRowIcon(g, rows[i].icon, x + 20 * s + 15 * s, ry + 15 * s, 15 * s, pal);
-        SText(g, rows[i].name, 15, FW_NORMAL, pal.title, light, x + 62 * s, ry,
-            160 * s, 30 * s);
-        wchar_t val[32];
-        WPrintf(val, 32, L"%d %s", rows[i].value, rows[i].unit);
-        Gdiplus::RectF pill(x + w - 20 * s - 76 * s, ry + 1 * s, 76 * s, 26 * s);
-        DrawValuePill(g, pill, val, pal, light);
-        Gdiplus::RectF track(x + 232 * s, ry + 11 * s,
-            (pill.X - 14 * s) - (x + 232 * s), 8 * s);
+        float ry = cy3 + i * 38 * s;
+        SText(g, rows[i].name, 15, FW_NORMAL, pal.title, light, x + 20 * s, ry,
+            150 * s, 24 * s);
+        Gdiplus::RectF track(x + 20 * s + 150 * s, ry + 8 * s,
+            w - 40 * s - 150 * s - 64 * s, 9 * s);
         float t = (float)(rows[i].value - rows[i].minV) / (float)(rows[i].maxV - rows[i].minV);
         DrawSlider(g, track, t, pal, light);
+        wchar_t val[32];
+        WPrintf(val, 32, L"%d%s", rows[i].value, rows[i].unit);
+        SText(g, val, 14, FW_NORMAL, sub, light, track.GetRight() + 8 * s, ry,
+            56 * s, 24 * s, DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
         RECT* target = (rows[i].act == ACT_OPACITY) ? &g_opTrack : &g_radTrack;
         *target = RECT{ (LONG)track.X, (LONG)track.Y, (LONG)track.GetRight(), (LONG)track.GetBottom() };
-        HitAdd((int)track.X - 6, (int)ry, (int)track.Width + 12, (int)(30 * s), rows[i].act);
-        ry += 44 * s;
-    }
-
-    // --- 显示位置 ---
-    float y5 = cardC2.GetBottom() + 12 * s;
-    Gdiplus::RectF cardC5(x, y5, w, pad * 2 + 30 * s + 32 * s);
-    FillRound(g, cardC5, 14 * s, pal.card);
-    float cy5 = y5 + pad;
-    DrawRowIcon(g, 4, x + 20 * s + 15 * s, cy5 + 15 * s, 15 * s, pal);
-    SText(g, L"显示位置", 15, FW_NORMAL, pal.title, light, x + 62 * s, cy5,
-        160 * s, 30 * s);
-    const wchar_t* posLabels[5] = { L"上移", L"下移", L"左移", L"右移", L"默认位置" };
-    {
-        float bx = x + 20 * s;
-        float byy = cy5 + 34 * s;
-        float bh = 32 * s;
-        float widths[5] = { 72 * s, 72 * s, 72 * s, 72 * s, 100 * s };
-        for (int i = 0; i < 5; i++) {
-            Gdiplus::RectF b(bx, byy, widths[i], bh);
-            DrawTextButton(g, b, posLabels[i], pal, light, g_setHot == ACT_POS + i, ACT_POS + i);
-            bx += widths[i] + 12 * s;
-        }
+        HitAdd((int)track.X - 6, (int)ry, (int)track.Width + 12, (int)(26 * s), rows[i].act);
     }
 }
 
@@ -4430,7 +4371,7 @@ static void PageSystem(Gdiplus::Graphics& g, const Palette& pal, bool light,
 static void SettingsDraw(Gdiplus::Graphics& g)
 {
     double s = SettingsScale();
-    Palette pal = MakePalette(EffectiveDark(), 255);
+    Palette pal = MakePalette(g_lightText, 255);
     const bool light = pal.darkCard;   // light text == dark page
 
     // Full-bleed square background: the window corners are DWM's (see
@@ -4462,26 +4403,19 @@ static void SettingsDraw(Gdiplus::Graphics& g)
         HitAdd((int)close.X, (int)close.Y, (int)close.Width, (int)close.Height, ACT_CLOSE);
     }
 
-    // ---- sidebar: icon tiles (PanDa-style rail) ----
+    // ---- sidebar ----
     float navX = 20 * (float)s;
-    float navY = 84 * (float)s;
-    const wchar_t* navNames[4] = { L"外观", L"显示内容", L"系统信息", L"关于" };
-    for (int i = 0; i < 4; i++) {
-        float tileY = navY + i * 86 * s;
+    float navY = 76 * (float)s;
+    const wchar_t* navNames[3] = { L"外观", L"显示内容", L"关于" };
+    for (int i = 0; i < 3; i++) {
+        Gdiplus::RectF item(navX, navY + i * 54 * s, 200 * s, 46 * s);
         bool on = (g_setPage == i);
-        Gdiplus::RectF tile(navX, tileY, 200 * s, 78 * s);
-        if (on) FillRound(g, tile, 14 * s, pal.itemBg);
-        // icon chip: rounded square, accent-tinted when selected
-        Gdiplus::RectF chip(navX + 20 * s, tileY + 10 * s, 44 * s, 44 * s);
-        Gdiplus::Color chipFill = on
-            ? Gdiplus::Color(255, pal.primary.GetR(), pal.primary.GetG(), pal.primary.GetB())
-            : pal.chipBg;
-        FillRound(g, chip, 12 * s, chipFill);
-        Gdiplus::Color fg = on ? Gdiplus::Color(255, 255, 255, 255) : pal.chipFg;
-        DrawNavIcon(g, i == 3 ? 2 : (i == 2 ? 3 : i), chip.X + 10 * s, chip.Y + 10 * s, 24 * s, fg);
-        SText(g, navNames[i], 14, FW_NORMAL, on ? pal.itemFg : pal.detail, light,
-            navX + 76 * s, tileY, 116 * s, 78 * s);
-        HitAdd((int)tile.X, (int)tile.Y, (int)tile.Width, (int)tile.Height, ACT_NAV + i);
+        if (on) FillRound(g, item, 12 * s, pal.itemBg);
+        Gdiplus::Color fg = on ? pal.itemFg : pal.detail;
+        DrawNavIcon(g, i == 2 ? 2 : i, item.X + 14 * s, item.Y + 13 * s, 20 * s, fg);
+        SText(g, navNames[i], 15, FW_NORMAL, fg, light,
+            item.X + 46 * s, item.Y, item.Width - 56 * s, item.Height);
+        HitAdd((int)item.X, (int)item.Y, (int)item.Width, (int)item.Height, ACT_NAV + i);
     }
 
     wchar_t foot[64];
@@ -4495,17 +4429,13 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     float cwp = page.Width - 240 * s - 32 * s;
 
     // page heading with the theme's accent bar
-    const wchar_t* titles[4] = { L"外观", L"显示内容", L"系统信息", L"关于" };
-    if (g_setPage != 3) {
+    const wchar_t* titles[3] = { L"外观", L"显示内容", L"关于" };
+    if (g_setPage != 2) {
         FillRound(g, MRect(cxp, cyp + 6 * s, 4 * s, 24 * s), 2 * s, pal.primary);
         SText(g, titles[g_setPage], 24, FW_NORMAL, pal.title, light, cxp + 16 * s, cyp,
             cwp - 16 * s, 32 * s);
-        const wchar_t* subs[3] = {
-            L"面板画在桌面层上，这里决定它离壁纸有多近",
-            L"关掉的项目不再出现在面板上",
-            L"本机的厂商、系统与用户目录，可一键保存成资料",
-        };
-        SText(g, subs[g_setPage < 3 ? g_setPage : 2],
+        SText(g, g_setPage == 0 ? L"面板画在桌面层上，这里决定它离壁纸有多近"
+                                : L"关掉的项目不再出现在面板上",
             14, FW_NORMAL, pal.detail, light, cxp + 16 * s, cyp + 34 * s,
             cwp - 16 * s, 20 * s);
         cyp += 68 * s;
@@ -4513,7 +4443,6 @@ static void SettingsDraw(Gdiplus::Graphics& g)
 
     if (g_setPage == 0) PageLook(g, pal, light, cxp, cyp, cwp, (float)s);
     else if (g_setPage == 1) PageContent(g, pal, light, cxp, cyp, cwp, (float)s);
-    else if (g_setPage == 2) PageSystem(g, pal, light, cxp, cyp, cwp, (float)s);
     else PageAbout(g, pal, light, cxp, cyp + 30 * s, cwp, (float)s);
 }
 
@@ -5094,8 +5023,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (lParam == WM_RBUTTONUP || lParam == WM_LBUTTONDBLCLK)
             ShowTrayMenu(hwnd);
         else if (lParam == WM_LBUTTONUP) {
-            // 左键单击托盘：直接打开「系统信息」（硬件信息 + 本机资料）
-            g_setPage = 2;
+            // 左键单击托盘：打开设置窗口（系统信息独立窗口接上后改为指向它）
+            g_setPage = 0;
             OpenSettings();
         }
         return 0;
