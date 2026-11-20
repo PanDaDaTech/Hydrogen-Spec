@@ -483,7 +483,7 @@ static float UiKvWidth(const KvPair& kv, float s)
 
 static int UiKvLines(const UiRow& row, float rowW, float s, int* wideOut = NULL)
 {
-    int lines = 1;
+    int lines = 0;
     int wide = 0;
     float used = 0;
     KvPair parts[12];
@@ -495,7 +495,6 @@ static int UiKvLines(const UiRow& row, float rowW, float s, int* wideOut = NULL)
                 wide++;
                 if (used > 0) { lines++; used = 0; }
                 lines++;
-                used = 0;
             } else if (used > 0 && used + kUiCellGap * s + pw > rowW) {
                 lines++;
                 used = pw;
@@ -504,6 +503,8 @@ static int UiKvLines(const UiRow& row, float rowW, float s, int* wideOut = NULL)
             }
         }
     }
+    if (used > 0) lines++;
+    if (lines == 0) lines = 1;
     if (wideOut) *wideOut = wide;
     return lines;
 }
@@ -605,9 +606,11 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     int lines = UiKvLines(row, w - 44 * s, s);
     float ry = hy + chip + 7 * s;
-    float cx = x + 44 * s;
     float lineW = w - 44 * s;
-    int drawn = 1;
+    float x0 = x + 44 * s;
+    float step = kUiLineH * s + 2 * s;
+    int line = 0;
+    float used = 0;
 
     KvPair parts[12];
     for (int d = 0; d < row.detailCount; d++) {
@@ -616,32 +619,25 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             float pw = UiKvWidth(parts[i], s);
             bool wide = (parts[i].label[0] == 0);
             if (wide) {
-                if (cx > x + 44 * s) { ry += kUiLineH * s + 2 * s; drawn++; }
-                if (drawn > lines) break;
-                SText(g, parts[i].value, 12, FW_NORMAL, u.t75, light, cx, ry, lineW,
-                    kUiLineH * s);
-                ry += kUiLineH * s + 2 * s;
-                drawn++;
-                cx = x + 44 * s;
+                if (used > 0) { line++; used = 0; }
+                SText(g, parts[i].value, 12, FW_NORMAL, u.t75, light, x0, ry + line * step,
+                    lineW, kUiLineH * s);
+                line++;
                 continue;
             }
-            if (cx > x + 44 * s && cx + kUiCellGap * s + pw > x + 44 * s + lineW) {
-                cx = x + 44 * s;
-                ry += kUiLineH * s + 2 * s;
-                drawn++;
-            }
-            if (drawn > lines) break;
-            SText(g, parts[i].label, 12, FW_NORMAL, u.t50, light, cx, ry,
+            if (used > 0 && used + kUiCellGap * s + pw > lineW) { line++; used = 0; }
+            float cx = x0 + used;
+            SText(g, parts[i].label, 12, FW_NORMAL, u.t50, light, cx, ry + line * step,
                 kUiKeyW * s, kUiLineH * s);
             Gdiplus::Pen sep(u.line, 1.0f);
             float sx = cx + kUiKeyW * s;
-            g.DrawLine(&sep, sx, ry + 5 * s, sx, ry + kUiLineH * s - 5 * s);
+            g.DrawLine(&sep, sx, ry + line * step + 5 * s, sx,
+                ry + line * step + kUiLineH * s - 5 * s);
             float vx = sx + (1 + kUiKeyGap) * s;
-            SText(g, parts[i].value, 12, FW_NORMAL, u.t90, light, vx, ry,
+            SText(g, parts[i].value, 12, FW_NORMAL, u.t90, light, vx, ry + line * step,
                 cx + pw - vx, kUiLineH * s);
-            cx += pw + kUiCellGap * s;
+            used += pw + kUiCellGap * s;
         }
-        if (drawn > lines) break;
     }
 
     return UiSectionHeight(lines);
