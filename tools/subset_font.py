@@ -29,6 +29,11 @@ ever rendered as tofu.
 import sys
 from pathlib import Path
 
+# CI 跑在 Windows runner 上，stdout 默认是 cp1252：一旦要打印缺失的中文字符，
+# 脚本自己先抛 UnicodeEncodeError，真正的「哪个字缺了」反而看不到。
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "hspec.cpp"
 HARDWARE = ROOT / "tools" / "hardware_words.txt"
