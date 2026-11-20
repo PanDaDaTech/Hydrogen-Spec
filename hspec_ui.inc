@@ -468,20 +468,48 @@ static void UiIconButton(Gdiplus::Graphics& g, const UiStyle& u, float x, float 
     UiHit(x, y, w, h, act);
 }
 
-// 一行 KV：72dp 标签列 + 1px 竖线 + 值
+// 一行 KV：标签列 + 1px 竖线 + 值。标签列宽按本节最长标签收缩（上限 72dp），
+// 这样短标签（核心 / 线程）不会在自己和竖线之间留下半截空白。
 static const float kUiKeyW = 72.0f;
 static const float kUiKeyGap = 10.0f;
 static const float kUiCellGap = 24.0f;
 static const float kUiLineH = 21.0f;
 
-static float UiKvWidth(const KvPair& kv, float s)
+static float UiKeyWidthFor(const wchar_t* const* labels, int n, float s)
+{
+    float maxPx = 0;
+    for (int i = 0; i < n; i++) {
+        if (!labels[i] || !labels[i][0]) continue;
+        float px = (float)UiTextW(labels[i], 12.0f);
+        if (px > maxPx) maxPx = px;
+    }
+    float dp = maxPx / (s > 0 ? s : 1) + 14.0f;
+    if (dp < 32.0f) dp = 32.0f;
+    if (dp > kUiKeyW) dp = kUiKeyW;
+    return dp;
+}
+
+static float UiKvWidth(const KvPair& kv, float s, float keyW)
 {
     if (kv.label[0])
-        return (kUiKeyW + 1 + kUiKeyGap) * s + UiTextW(kv.value, 12.0f);
+        return (keyW + 1 + kUiKeyGap) * s + UiTextW(kv.value, 12.0f);
     return UiTextW(kv.value, 12.0f);
 }
 
-static int UiKvLines(const UiRow& row, float rowW, float s, int* wideOut = NULL)
+static float UiSectionKeyW(const UiRow& row, float s)
+{
+    const wchar_t* labels[24];
+    int n = 0;
+    KvPair parts[12];
+    for (int d = 0; d < row.detailCount && n < 24; d++) {
+        int m = SplitDetail(row.details[d], parts, 12);
+        for (int i = 0; i < m && n < 24; i++) labels[n++] = parts[i].label;
+    }
+    return UiKeyWidthFor(labels, n, s);
+}
+
+static int UiKvLines(const UiRow& row, float rowW, float s, float keyW,
+    int* wideOut = NULL)
 {
     int lines = 0;
     int wide = 0;
@@ -490,7 +518,7 @@ static int UiKvLines(const UiRow& row, float rowW, float s, int* wideOut = NULL)
     for (int d = 0; d < row.detailCount; d++) {
         int n = SplitDetail(row.details[d], parts, 12);
         for (int i = 0; i < n; i++) {
-            float pw = UiKvWidth(parts[i], s);
+            float pw = UiKvWidth(parts[i], s, keyW);
             if (parts[i].label[0] == 0) {
                 wide++;
                 if (used > 0) { lines++; used = 0; }
@@ -604,7 +632,8 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             tr.Height, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 
-    int lines = UiKvLines(row, w - 44 * s, s);
+    float keyW = UiSectionKeyW(row, s);
+    int lines = UiKvLines(row, w - 44 * s, s, keyW);
     float ry = hy + chip + 7 * s;
     float lineW = w - 44 * s;
     float x0 = x + 44 * s;
@@ -616,7 +645,7 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     for (int d = 0; d < row.detailCount; d++) {
         int n = SplitDetail(row.details[d], parts, 12);
         for (int i = 0; i < n; i++) {
-            float pw = UiKvWidth(parts[i], s);
+            float pw = UiKvWidth(parts[i], s, keyW);
             bool wide = (parts[i].label[0] == 0);
             if (wide) {
                 if (used > 0) { line++; used = 0; }
@@ -628,9 +657,9 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             if (used > 0 && used + kUiCellGap * s + pw > lineW) { line++; used = 0; }
             float cx = x0 + used;
             SText(g, parts[i].label, 12, FW_NORMAL, u.t50, light, cx, ry + line * step,
-                kUiKeyW * s, kUiLineH * s);
+                keyW * s, kUiLineH * s);
             Gdiplus::Pen sep(u.line, 1.0f);
-            float sx = cx + kUiKeyW * s;
+            float sx = cx + keyW * s;
             g.DrawLine(&sep, sx, ry + line * step + 5 * s, sx,
                 ry + line * step + kUiLineH * s - 5 * s);
             float vx = sx + (1 + kUiKeyGap) * s;
@@ -723,7 +752,7 @@ static void PageHwUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     if (!split) {
         float total = padY * 2;
         for (int i = 0; i < g_rowCount; i++)
-            total += UiSectionHeight(UiKvLines(g_rows[i], innerW - 44 * s, s));
+            total += UiSectionHeight(UiKvLines(g_rows[i], innerW - 44 * s, s, UiSectionKeyW(g_rows[i], s)));
         if (!plain) FillRound(g, MRect(x, y2, w, total), 16 * s, u.card);
         float cy = y2 + padY;
         for (int i = 0; i < g_rowCount; i++) {
@@ -736,7 +765,7 @@ static void PageHwUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         for (int i = 0; i < g_rowCount; i++) {
             wchar_t tag[64];
             UiSectionTag(g_rows[i], diskCount, netCount, tag, 64);
-            float h = UiSectionHeight(UiKvLines(g_rows[i], innerW - 44 * s, s));
+            float h = UiSectionHeight(UiKvLines(g_rows[i], innerW - 44 * s, s, UiSectionKeyW(g_rows[i], s)));
             FillRound(g, MRect(x, y2, w, h), 16 * s, u.card);
             UiDrawSection(g, u, light, g_rows[i], tag, x + padX, y2, innerW, false);
             y2 += h + 10 * s;
@@ -752,15 +781,16 @@ static void PageHwUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 // ---------------------------------------------------------------------------
 
 static void UiKvRow(Gdiplus::Graphics& g, const UiStyle& u, bool light,
-    const wchar_t* k, const wchar_t* v, float x, float y, float w, float s)
+    const wchar_t* k, const wchar_t* v, float x, float y, float w, float s,
+    float keyW = kUiKeyW)
 {
-    SText(g, k, 12, FW_NORMAL, u.t50, light, x, y, kUiKeyW * s, 21 * s);
+    SText(g, k, 12, FW_NORMAL, u.t50, light, x, y, keyW * s, 21 * s);
     Gdiplus::Pen sep(u.line, 1.0f);
-    float sx = x + kUiKeyW * s;
+    float sx = x + keyW * s;
     g.DrawLine(&sep, sx, y + 5 * s, sx, y + 16 * s);
     const bool empty = (!v || !v[0]);
     SText(g, empty ? L"—" : v, 12, FW_NORMAL, empty ? u.t40 : u.t90, light,
-        sx + kUiKeyGap * s, y, w - (kUiKeyW + kUiKeyGap) * s, 21 * s);
+        sx + kUiKeyGap * s, y, w - (keyW + kUiKeyGap) * s, 21 * s);
 }
 
 static void UiSysTimeText(wchar_t* out, int cch)
@@ -855,16 +885,20 @@ static void PageSysUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         float colW = (fw - 26 * s) * 0.5f;
         float rowH = 21 * s;
         float fy = cy + 16 * s;
+        static const wchar_t* const vendorKeys[6] = {
+            L"制造商", L"型号", L"支持时间", L"电话", L"网址", L"Logo 位置"
+        };
+        float vKey = UiKeyWidthFor(vendorKeys, 6, s);
 
-        UiKvRow(g, u, light, L"制造商", t.manufacturer, fx, fy, colW, s);
-        UiKvRow(g, u, light, L"型号", t.model, fx + colW + 26 * s, fy, colW, s);
+        UiKvRow(g, u, light, L"制造商", t.manufacturer, fx, fy, colW, s, vKey);
+        UiKvRow(g, u, light, L"型号", t.model, fx + colW + 26 * s, fy, colW, s, vKey);
         fy += rowH;
-        UiKvRow(g, u, light, L"支持时间", NULL, fx, fy, colW, s);
-        UiKvRow(g, u, light, L"电话", t.phone, fx + colW + 26 * s, fy, colW, s);
+        UiKvRow(g, u, light, L"支持时间", NULL, fx, fy, colW, s, vKey);
+        UiKvRow(g, u, light, L"电话", t.phone, fx + colW + 26 * s, fy, colW, s, vKey);
         fy += rowH;
-        UiKvRow(g, u, light, L"网址", t.supportUrl, fx, fy, fw, s);
+        UiKvRow(g, u, light, L"网址", t.supportUrl, fx, fy, fw, s, vKey);
         fy += rowH;
-        UiKvRow(g, u, light, L"Logo 位置", t.logoFile, fx, fy, fw, s);
+        UiKvRow(g, u, light, L"Logo 位置", t.logoFile, fx, fy, fw, s, vKey);
     }
     cy += vH + 12 * s;
 
@@ -908,14 +942,21 @@ static void PageSysUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         float rightX = innerX + colW + 30 * s;
         float ry = cy + 12 * s;
 
+        const wchar_t* lk[10];
+        const wchar_t* rk[11];
+        for (int i = 0; i < 10; i++) lk[i] = left[i].k;
+        for (int i = 0; i < 11; i++) rk[i] = right[i].k;
+        float lKey = UiKeyWidthFor(lk, 10, s);
+        float rKey = UiKeyWidthFor(rk, 11, s);
+
         for (int i = 0; i < 10; i++)
-            UiKvRow(g, u, light, left[i].k, left[i].v, innerX, ry + i * 25 * s, colW, s);
+            UiKvRow(g, u, light, left[i].k, left[i].v, innerX, ry + i * 25 * s, colW, s, lKey);
         Gdiplus::Pen vline(u.divider, 1.0f);
         g.DrawLine(&vline, innerX + colW + 15 * s, cy + 12 * s,
             innerX + colW + 15 * s, cy + tH - 12 * s);
         for (int i = 0; i < 11; i++)
             UiKvRow(g, u, light, right[i].k, right[i].v, rightX, ry + i * 25 * s,
-                colW, s);
+                colW, s, rKey);
     }
     cy += tH + 12 * s;
 
