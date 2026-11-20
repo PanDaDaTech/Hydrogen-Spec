@@ -2268,16 +2268,12 @@ static void BuildModel(void)
     if (!g_skipSection) {
         NpuInfo npus[2];
         int nn = EnumNpus(npus, 2);
-        if (nn <= 0) {
-            r = ModelAddRow(ICON_NPU, L"NPU: 未检测到");
-            ModelAddDetail(r, L"当前系统没有可用的神经网络加速器");
-        } else {
-            for (int i = 0; i < nn; i++) {
-                wchar_t t[200];
-                WPrintf(t, 200, L"NPU: %s", npus[i].name);
-                r = ModelAddRow(ICON_NPU, t);
-                if (i == 0) ModelAddDetail(r, L"类型: 神经网络加速器");
-            }
+        // 没有设备就整段不出现，不留「未检测到」这种空行
+        for (int i = 0; i < nn; i++) {
+            wchar_t t[200];
+            WPrintf(t, 200, L"NPU: %s", npus[i].name);
+            r = ModelAddRow(ICON_NPU, t);
+            if (i == 0) ModelAddDetail(r, L"类型: 神经网络加速器");
         }
     }
 
@@ -2935,6 +2931,18 @@ static void DrawGlyph(Gdiplus::Graphics& g, Gdiplus::Pen& pen, int kind,
         g.DrawLine(&pen, x + 8 * u, y + 20 * u, x + 16 * u, y + 20 * u);
         break;
     }
+    case ICON_NPU: {
+        // Accelerator: one hub node wired to three satellites.
+        const float hx = x + 12 * u, hy = y + 12 * u;
+        const float sat[3][2] = { { 12.0f, 4.5f }, { 19.0f, 16.5f }, { 5.0f, 16.5f } };
+        for (int i = 0; i < 3; i++) {
+            float sx = x + sat[i][0] * u, sy = y + sat[i][1] * u;
+            g.DrawLine(&pen, hx, hy, sx, sy);
+            g.DrawEllipse(&pen, sx - 2.0f * u, sy - 2.0f * u, 4.0f * u, 4.0f * u);
+        }
+        g.DrawEllipse(&pen, hx - 2.8f * u, hy - 2.8f * u, 5.6f * u, 5.6f * u);
+        break;
+    }
     default: break;
     }
 }
@@ -3222,9 +3230,6 @@ static void DumpPanelIfRequested(const void* bits)
         out.Save(path, &png, NULL);
 }
 
-static void DrawHwIconGlyph(Gdiplus::Graphics& g, int kind, float cx, float cy, float r,
-    const Gdiplus::Color& fg);
-
 static bool RenderInternal(void)
 {
     if (!g_hwnd || g_winW <= 0 || g_winH <= 0) return false;
@@ -3300,17 +3305,13 @@ static bool RenderInternal(void)
             Gdiplus::SolidBrush chipBrush(pal.chipBg);
             g.FillPath(&chipBrush, &cp);
 
-            // 与设置页「硬件显示」用同一套 pictogram
-            DrawHwIconGlyph(g, row.icon,
-                chip.X + (float)g_chipSize * 0.5f,
-                chip.Y + (float)g_chipSize * 0.5f,
-                (float)g_chipSize * 0.33f, iconColor);
+            float glyph = (float)g_chipSize * 0.56f;
+            DrawGlyph(g, pen, row.icon,
+                chip.X + ((float)g_chipSize - glyph) * 0.5f,
+                chip.Y + ((float)g_chipSize - glyph) * 0.5f, glyph, (float)s);
         } else {
             float iconY = y + ((float)g_titleH - (float)g_iconSize) * 0.5f;
-            DrawHwIconGlyph(g, row.icon,
-                2.0f * (float)s + (float)g_iconSize * 0.5f,
-                iconY + (float)g_iconSize * 0.5f,
-                (float)g_iconSize * 0.36f, iconColor);
+            DrawGlyph(g, pen, row.icon, 2.0f * (float)s, iconY, (float)g_iconSize, (float)s);
         }
         DrawTextGdiLine(g, row.title, titlePx, FW_NORMAL, titleColor, lightText,
             (int)textX, (int)y, (int)textW, g_titleH);
@@ -3947,40 +3948,58 @@ static void DrawThemeThumb(Gdiplus::Graphics& g, const Gdiplus::RectF& rc, int k
 // Linear icon set on a 24dp grid: strokes scale with the icon size, round caps and
 // joins, shapes kept inside a 18dp safe area. Matches the Ethereal silhouette rules
 // and sits centred in the PanDaPE-style rounded tile.
-static void DrawNavIcon(Gdiplus::Graphics& g, int kind, float x, float y, float sz,
-    const Gdiplus::Color& c)
+// 侧栏图标：圆角方块底 + 24 网格描边字形，和面板、硬件显示页同一套观感。
+static void DrawNavIcon(Gdiplus::Graphics& g, int kind, const Gdiplus::RectF& box,
+    const Palette& pal, bool on)
 {
+    Gdiplus::GraphicsPath bp;
+    AddRoundRect(bp, box, box.Height * 0.3f);
+    Gdiplus::SolidBrush bg(on ? pal.card : pal.chipBg);
+    g.FillPath(&bg, &bp);
+
+    const float sz = box.Height * 0.64f;
+    const float x = box.X + (box.Width - sz) * 0.5f;
+    const float y = box.Y + (box.Height - sz) * 0.5f;
+    const Gdiplus::Color c = pal.chipFg;
     const float u = sz / 24.0f;
-    Gdiplus::Pen pen(c, 1.8f * u);
+    Gdiplus::Pen pen(c, 1.5f * u);
     pen.SetLineJoin(Gdiplus::LineJoinRound);
     pen.SetStartCap(Gdiplus::LineCapRound);
     pen.SetEndCap(Gdiplus::LineCapRound);
     Gdiplus::SolidBrush dot(c);
 
-    if (kind == 0) {
-        // 外观：调色板（圆盘 + 右下拇指孔缺口 + 三枚颜料点）
+    switch (kind) {
+    case 0: {   // 外观：调色板
         g.DrawArc(&pen, x + 3.4f * u, y + 3.4f * u, 17.2f * u, 17.2f * u, 54.0f, 342.0f);
         const float pts[3][2] = { { 9.0f, 9.3f }, { 9.7f, 15.0f }, { 14.6f, 9.6f } };
         for (int i = 0; i < 3; i++)
-            g.FillEllipse(&dot, x + (pts[i][0] - 1.5f) * u, y + (pts[i][1] - 1.5f) * u,
-                3.0f * u, 3.0f * u);
-    } else if (kind == 1) {
-        // 显示内容：条目列表（圆点 + 行）
+            g.FillEllipse(&dot, x + (pts[i][0] - 1.4f) * u, y + (pts[i][1] - 1.4f) * u,
+                2.8f * u, 2.8f * u);
+        break;
+    }
+    case 1: {   // 显示内容：条目列表
         const float rows[3] = { 7.0f, 12.0f, 17.0f };
         for (int i = 0; i < 3; i++) {
-            g.FillEllipse(&dot, x + 4.2f * u, y + (rows[i] - 1.5f) * u, 3.0f * u, 3.0f * u);
+            g.FillEllipse(&dot, x + 4.2f * u, y + (rows[i] - 1.4f) * u, 2.8f * u, 2.8f * u);
             g.DrawLine(&pen, x + 9.8f * u, y + rows[i] * u, x + 19.6f * u, y + rows[i] * u);
         }
-    } else if (kind == 3) {
-        // 系统信息：显示器
+        break;
+    }
+    case 2: {   // 关于：信息圆
+        g.DrawEllipse(&pen, x + 4.0f * u, y + 4.0f * u, 16.0f * u, 16.0f * u);
+        g.FillEllipse(&dot, x + 10.7f * u, y + 6.2f * u, 2.6f * u, 2.6f * u);
+        g.DrawLine(&pen, x + 12.0f * u, y + 11.2f * u, x + 12.0f * u, y + 16.4f * u);
+        break;
+    }
+    case 3: {   // 硬件显示：显示器（与面板字形同坐标）
         Gdiplus::GraphicsPath scr;
-        AddRoundRect(scr, Gdiplus::RectF(x + 3.2f * u, y + 4.4f * u, 17.6f * u, 12.4f * u),
-            2.6f * u);
+        AddRoundRect(scr, Gdiplus::RectF(x + 2 * u, y + 4 * u, 20 * u, 13 * u), 2 * u);
         g.DrawPath(&pen, &scr);
-        g.DrawLine(&pen, x + 12.0f * u, y + 16.8f * u, x + 12.0f * u, y + 19.4f * u);
-        g.DrawLine(&pen, x + 8.6f * u, y + 19.4f * u, x + 15.4f * u, y + 19.4f * u);
-    } else if (kind == 4) {
-        // 目标系统信息：资料卡（带折角）
+        g.DrawLine(&pen, x + 12 * u, y + 17 * u, x + 12 * u, y + 20 * u);
+        g.DrawLine(&pen, x + 8 * u, y + 20 * u, x + 16 * u, y + 20 * u);
+        break;
+    }
+    case 4: {   // 目标系统信息：资料卡（带折角）
         Gdiplus::GraphicsPath doc;
         doc.AddLine(x + 5.0f * u, y + 3.6f * u, x + 13.4f * u, y + 3.6f * u);
         doc.AddLine(x + 13.4f * u, y + 3.6f * u, x + 19.0f * u, y + 9.2f * u);
@@ -3992,24 +4011,26 @@ static void DrawNavIcon(Gdiplus::Graphics& g, int kind, float x, float y, float 
         g.DrawLine(&pen, x + 13.4f * u, y + 9.2f * u, x + 19.0f * u, y + 9.2f * u);
         g.DrawLine(&pen, x + 8.2f * u, y + 13.0f * u, x + 15.8f * u, y + 13.0f * u);
         g.DrawLine(&pen, x + 8.2f * u, y + 16.6f * u, x + 13.4f * u, y + 16.6f * u);
-    } else if (kind == 5) {
-        // 设置：齿轮
+        break;
+    }
+    case 5: {   // 设置：齿轮
         g.DrawEllipse(&pen, x + 5.6f * u, y + 5.6f * u, 12.8f * u, 12.8f * u);
-        Gdiplus::Pen tooth(c, 2.6f * u);
-        tooth.SetStartCap(Gdiplus::LineCapRound);
-        tooth.SetEndCap(Gdiplus::LineCapRound);
         for (int i = 0; i < 8; i++) {
             double a = i * 3.14159265358979323846 / 4.0;
             float c1 = (float)cos(a), s1 = (float)sin(a);
-            g.DrawLine(&tooth, x + (12.0f + c1 * 6.4f) * u, y + (12.0f + s1 * 6.4f) * u,
+            g.DrawLine(&pen, x + (12.0f + c1 * 6.4f) * u, y + (12.0f + s1 * 6.4f) * u,
                 x + (12.0f + c1 * 8.6f) * u, y + (12.0f + s1 * 8.6f) * u);
         }
-        g.FillEllipse(&dot, x + 10.4f * u, y + 10.4f * u, 3.2f * u, 3.2f * u);
-    } else {
-        // 关于：信息圆
-        g.DrawEllipse(&pen, x + 4.0f * u, y + 4.0f * u, 16.0f * u, 16.0f * u);
-        g.FillEllipse(&dot, x + 10.6f * u, y + 6.1f * u, 2.9f * u, 2.9f * u);
-        g.DrawLine(&pen, x + 12.0f * u, y + 11.2f * u, x + 12.0f * u, y + 16.4f * u);
+        g.FillEllipse(&dot, x + 10.6f * u, y + 10.6f * u, 2.8f * u, 2.8f * u);
+        break;
+    }
+    default: {  // 返回：左向折线
+        float ax = x + 4 * u, ay = y + 12 * u;
+        g.DrawLine(&pen, ax + 15 * u, ay - 8 * u, ax, ay);
+        g.DrawLine(&pen, ax, ay, ax + 15 * u, ay + 8 * u);
+        g.DrawLine(&pen, ax, ay, x + 21 * u, ay);
+        break;
+    }
     }
 }
 
@@ -4376,8 +4397,8 @@ static void PageContent(Gdiplus::Graphics& g, const Palette& pal, bool light,
         glyphPen.SetEndCap(Gdiplus::LineCapRound);
         static const int kToggleIcon[TOGGLE_COUNT] = {
             ICON_CPU, ICON_BOARD, ICON_RAM, ICON_DISK, ICON_GPU, ICON_NPU, ICON_NET };
-        DrawHwIconGlyph(g, kToggleIcon[i], prev.X + 20 * s, prev.Y + 24 * s,
-            8.6f * (float)s, pal.chipFg);
+        DrawGlyph(g, glyphPen, kToggleIcon[i], prev.X + 8 * s, prev.Y + 12 * s,
+            24 * s, (float)s);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 15 * s, 34 * s, 4 * s), 2 * s, pal.title);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 25 * s, 30 * s, 3 * s), 1.5f * s, pal.detail);
         FillRound(g, MRect(prev.X + 40 * s, prev.Y + 33 * s, 24 * s, 3 * s), 1.5f * s, pal.detail);
@@ -4477,117 +4498,6 @@ static void PageAbout(Gdiplus::Graphics& g, const Palette& pal, bool light,
 // 主界面：硬件显示（Tab 1）
 // ---------------------------------------------------------------------------
 
-// Hardware pictograms on the same 24dp grid as the rail icons.
-// 硬件字形（不含底）：面板与设置页共用同一套 pictogram。
-static void DrawHwIconGlyph(Gdiplus::Graphics& g, int kind, float cx, float cy, float r,
-    const Gdiplus::Color& fg)
-{
-    const float u = r / 10.5f;
-    Gdiplus::Pen pen(fg, 1.7f * u);
-    pen.SetLineJoin(Gdiplus::LineJoinRound);
-    pen.SetStartCap(Gdiplus::LineCapRound);
-    pen.SetEndCap(Gdiplus::LineCapRound);
-
-    switch (kind) {
-    case ICON_CPU: {
-        Gdiplus::GraphicsPath sq;
-        AddRoundRect(sq, Gdiplus::RectF(cx - 6.2f * u, cy - 6.2f * u, 12.4f * u, 12.4f * u),
-            2.2f * u);
-        g.DrawPath(&pen, &sq);
-        Gdiplus::GraphicsPath in;
-        AddRoundRect(in, Gdiplus::RectF(cx - 2.4f * u, cy - 2.4f * u, 4.8f * u, 4.8f * u),
-            1.0f * u);
-        g.DrawPath(&pen, &in);
-        for (int i = -1; i <= 1; i += 2) {
-            g.DrawLine(&pen, cx + i * 3.2f * u, cy - 8.2f * u, cx + i * 3.2f * u, cy - 6.6f * u);
-            g.DrawLine(&pen, cx + i * 3.2f * u, cy + 6.6f * u, cx + i * 3.2f * u, cy + 8.2f * u);
-            g.DrawLine(&pen, cx - 8.2f * u, cy + i * 3.2f * u, cx - 6.6f * u, cy + i * 3.2f * u);
-            g.DrawLine(&pen, cx + 6.6f * u, cy + i * 3.2f * u, cx + 8.2f * u, cy + i * 3.2f * u);
-        }
-        break;
-    }
-    case ICON_BOARD: {
-        // 主板：板 + CPU 插座 + 三条内存插槽
-        Gdiplus::GraphicsPath bd;
-        AddRoundRect(bd, Gdiplus::RectF(cx - 7.4f * u, cy - 6.0f * u, 14.8f * u, 12.0f * u),
-            2.0f * u);
-        g.DrawPath(&pen, &bd);
-        Gdiplus::GraphicsPath chip;
-        AddRoundRect(chip, Gdiplus::RectF(cx - 5.0f * u, cy - 3.6f * u, 4.8f * u, 4.8f * u),
-            1.0f * u);
-        g.DrawPath(&pen, &chip);
-        for (int k = 0; k < 3; k++) {
-            float sx = cx + (1.6f + k * 1.8f) * u;
-            g.DrawLine(&pen, sx, cy - 3.6f * u, sx, cy + 3.6f * u);
-        }
-        break;
-    }
-    case ICON_RAM: {
-        Gdiplus::GraphicsPath st;
-        AddRoundRect(st, Gdiplus::RectF(cx - 4.2f * u, cy - 7.2f * u, 8.4f * u, 14.4f * u),
-            1.8f * u);
-        g.DrawPath(&pen, &st);
-        for (int i = -1; i <= 1; i++)
-            g.DrawLine(&pen, cx + i * 2.2f * u, cy - 3.6f * u, cx + i * 2.2f * u, cy + 3.0f * u);
-        g.DrawLine(&pen, cx - 2.8f * u, cy + 5.2f * u, cx + 2.8f * u, cy + 5.2f * u);
-        break;
-    }
-    case ICON_DISK: {
-        Gdiplus::GraphicsPath dk;
-        AddRoundRect(dk, Gdiplus::RectF(cx - 6.6f * u, cy - 6.6f * u, 13.2f * u, 13.2f * u),
-            2.2f * u);
-        g.DrawPath(&pen, &dk);
-        Gdiplus::SolidBrush dot(fg);
-        g.FillEllipse(&dot, cx - 4.2f * u, cy - 4.2f * u, 2.6f * u, 2.6f * u);
-        g.DrawLine(&pen, cx - 4.4f * u, cy + 3.6f * u, cx + 4.4f * u, cy + 3.6f * u);
-        break;
-    }
-    case ICON_GPU: {
-        // 显卡：卡身 + 风扇 + 散热鳍片（原来那两条"腿"会被看成三脚架/相机）
-        Gdiplus::GraphicsPath gd;
-        AddRoundRect(gd, Gdiplus::RectF(cx - 7.4f * u, cy - 4.8f * u, 14.8f * u, 9.6f * u),
-            2.0f * u);
-        g.DrawPath(&pen, &gd);
-        g.DrawEllipse(&pen, cx - 6.0f * u, cy - 2.4f * u, 4.8f * u, 4.8f * u);
-        g.DrawLine(&pen, cx + 0.4f * u, cy - 1.8f * u, cx + 5.6f * u, cy - 1.8f * u);
-        g.DrawLine(&pen, cx + 0.4f * u, cy + 1.8f * u, cx + 5.6f * u, cy + 1.8f * u);
-        break;
-    }
-    case ICON_NET: {   // 网卡：Wi-Fi
-        for (int i = 0; i < 3; i++) {
-            float rr = (2.6f + i * 2.6f) * u;
-            g.DrawArc(&pen, cx - rr, cy + 3.0f * u - rr, rr * 2, rr * 2, 200.0f, 140.0f);
-        }
-        Gdiplus::SolidBrush dot(fg);
-        g.FillEllipse(&dot, cx - 1.3f * u, cy + 2.2f * u, 2.6f * u, 2.6f * u);
-        break;
-    }
-    default: {   // ICON_NPU：中心节点 + 三条射线（神经网络，别画成三角形警告牌）
-        const double ang[3] = { -1.5707963, 0.5235988, 2.6179939 };   // 上 / 右下 / 左下
-        Gdiplus::SolidBrush node(fg);
-        for (int i = 0; i < 3; i++) {
-            float ex = (float)cos(ang[i]) * 6.2f * u;
-            float ey = (float)sin(ang[i]) * 6.2f * u;
-            g.DrawLine(&pen, cx, cy, cx + ex, cy + ey);
-            float r = 1.9f * u;
-            g.FillEllipse(&node, cx + ex - r, cy + ey - r, r * 2, r * 2);
-        }
-        float rc = 2.4f * u;
-        g.FillEllipse(&node, cx - rc, cy - rc, rc * 2, rc * 2);
-        break;
-    }
-    }
-}
-
-// 圆形底 + 字形：设置页的行图标用这个。
-static void DrawHwIcon(Gdiplus::Graphics& g, int kind, float cx, float cy, float r,
-    const Palette& pal)
-{
-    Gdiplus::SolidBrush bg(pal.chipBg);
-    g.FillEllipse(&bg, cx - r, cy - r, r * 2, r * 2);
-    DrawHwIconGlyph(g, kind, cx, cy, r, pal.chipFg);
-}
-
 static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
     float x, float y, float w, float s, float availH)
 {
@@ -4643,14 +4553,19 @@ static void PageHardware(Gdiplus::Graphics& g, const Palette& pal, bool light,
             g.DrawLine(&hair, textX, cy - gap * 0.5f, x + w - pad, cy - gap * 0.5f);
         }
 
-        // 分区图标：和面板同款，圆角方块底
+        // 分区图标：与面板卡片样式完全一致（圆角方块底 + 同一套字形）
         Gdiplus::RectF box(x + pad, cy + (rowH - chip) * 0.5f, chip, chip);
         Gdiplus::GraphicsPath bp;
         AddRoundRect(bp, box, chip * 0.3f);
         Gdiplus::SolidBrush chipBrush(pal.chipBg);
         g.FillPath(&chipBrush, &bp);
-        DrawHwIconGlyph(g, row.icon, box.X + chip * 0.5f, box.Y + chip * 0.5f,
-            chip * 0.33f, pal.chipFg);
+        Gdiplus::Pen gpen(pal.chipFg, 1.5f * s);
+        gpen.SetLineJoin(Gdiplus::LineJoinRound);
+        gpen.SetStartCap(Gdiplus::LineCapRound);
+        gpen.SetEndCap(Gdiplus::LineCapRound);
+        float gsz = chip * 0.56f;
+        DrawGlyph(g, gpen, row.icon, box.X + (chip - gsz) * 0.5f,
+            box.Y + (chip - gsz) * 0.5f, gsz, s);
 
         float tx = textX;
         float ty = cy + 2 * s;
@@ -4901,34 +4816,31 @@ static void SettingsDraw(Gdiplus::Graphics& g)
             bool on = (g_mainTab == i);
             if (on) FillRound(g, item, 12 * s, pal.itemBg);
             Gdiplus::Color fg = on ? pal.itemFg : pal.detail;
-            DrawNavIcon(g, i == 0 ? 3 : 4, item.X + 14 * s, item.Y + 13 * s, 20 * s, fg);
+            DrawNavIcon(g, i == 0 ? 3 : 4,
+                Gdiplus::RectF(item.X + 11 * s, item.Y + 8 * s, 30 * s, 30 * s), pal, on);
             SText(g, names[i], 15, FW_NORMAL, fg, light,
-                item.X + 46 * s, item.Y, item.Width - 56 * s, item.Height);
+                item.X + 54 * s, item.Y, item.Width - 64 * s, item.Height);
             HitAdd((int)item.X, (int)item.Y, (int)item.Width, (int)item.Height, ACT_NAV + i);
         }
 
         // 设置：二级页面入口
         Gdiplus::RectF setItem(navX, page.GetBottom() - 118 * s, 200 * s, 46 * s);
         if (g_setHot == ACT_OPEN_SET) FillRound(g, setItem, 12 * s, pal.chipBg);
-        DrawNavIcon(g, 5, setItem.X + 14 * s, setItem.Y + 13 * s, 20 * s, pal.detail);
+        DrawNavIcon(g, 5,
+            Gdiplus::RectF(setItem.X + 11 * s, setItem.Y + 8 * s, 30 * s, 30 * s), pal, false);
         SText(g, L"设置", 15, FW_NORMAL, pal.detail, light,
-            setItem.X + 46 * s, setItem.Y, setItem.Width - 56 * s, setItem.Height);
+            setItem.X + 54 * s, setItem.Y, setItem.Width - 64 * s, setItem.Height);
         HitAdd((int)setItem.X, (int)setItem.Y, (int)setItem.Width, (int)setItem.Height,
             ACT_OPEN_SET);
     } else {
         // 二级：返回 + 设置分页
         Gdiplus::RectF back(navX, navY, 200 * s, 46 * s);
         if (g_setHot == ACT_BACK) FillRound(g, back, 12 * s, pal.chipBg);
-        {
-            Gdiplus::Pen ap(pal.detail, 1.8f);
-            ap.SetStartCap(Gdiplus::LineCapRound);
-            ap.SetEndCap(Gdiplus::LineCapRound);
-            float ax = back.X + 20 * s, ay = back.Y + back.Height * 0.5f;
-            g.DrawLine(&ap, ax + 8 * s, ay - 6 * s, ax, ay);
-            g.DrawLine(&ap, ax, ay, ax + 8 * s, ay + 6 * s);
-        }
+        DrawNavIcon(g, 6,
+            Gdiplus::RectF(back.X + 11 * s, back.Y + 8 * s, 30 * s, 30 * s), pal,
+            g_setHot == ACT_BACK);
         SText(g, L"返回", 15, FW_NORMAL, pal.detail, light,
-            back.X + 46 * s, back.Y, back.Width - 56 * s, back.Height);
+            back.X + 54 * s, back.Y, back.Width - 64 * s, back.Height);
         HitAdd((int)back.X, (int)back.Y, (int)back.Width, (int)back.Height, ACT_BACK);
 
         const wchar_t* names[3] = { L"外观", L"显示内容", L"关于" };
@@ -4937,9 +4849,10 @@ static void SettingsDraw(Gdiplus::Graphics& g)
             bool on = (g_setPage == i);
             if (on) FillRound(g, item, 12 * s, pal.itemBg);
             Gdiplus::Color fg = on ? pal.itemFg : pal.detail;
-            DrawNavIcon(g, i == 2 ? 2 : i, item.X + 14 * s, item.Y + 13 * s, 20 * s, fg);
+            DrawNavIcon(g, i == 2 ? 2 : i,
+                Gdiplus::RectF(item.X + 11 * s, item.Y + 8 * s, 30 * s, 30 * s), pal, on);
             SText(g, names[i], 15, FW_NORMAL, fg, light,
-                item.X + 46 * s, item.Y, item.Width - 56 * s, item.Height);
+                item.X + 54 * s, item.Y, item.Width - 64 * s, item.Height);
             HitAdd((int)item.X, (int)item.Y, (int)item.Width, (int)item.Height,
                 ACT_SETNAV + i);
         }
