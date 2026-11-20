@@ -1475,9 +1475,16 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     };
     for (int i = 0; i < 3; i++) {
         float ry = cy + 10 * s + i * 30 * s;
-        SText(g, rows[i].k, 12, FW_NORMAL, u.t50, light, x + 62 * s, ry, 90 * s, 20 * s);
-        SText(g, rows[i].v, 12, FW_NORMAL, u.t90, light, x + 152 * s, ry,
-            w - 80 * s - 130 * s, 20 * s);
+        float labelX = x + 62 * s;
+        float labelW = 0;
+        for (int j = 0; j < 3; j++) {
+            float pw = (float)UiTextW(rows[j].k, 12.0f);
+            if (pw > labelW) labelW = pw;
+        }
+        labelW += 18 * s;
+        SText(g, rows[i].k, 12, FW_NORMAL, u.t50, light, labelX, ry, labelW, 20 * s);
+        SText(g, rows[i].v, 12, FW_NORMAL, u.t90, light, labelX + labelW, ry,
+            w - 80 * s - (labelW + 42 * s), 20 * s);
     }
     cy += cardH;
 
