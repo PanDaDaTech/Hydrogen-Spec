@@ -6310,50 +6310,40 @@ static void LoadLogoBitmaps(void)
     if (g_logoLight) return;
 
     const int size = 64;
-    HICON icon = (HICON)LoadImageW(GetModuleHandleW(NULL),
-        MAKEINTRESOURCEW(IDI_MAIN_ICON), IMAGE_ICON, size, size, LR_DEFAULTCOLOR);
-    if (!icon) return;
+    // Draw the mark ourselves instead of rasterising the .ico: DrawIconEx into a
+    // DIB drops the colour of 32bpp icons on some drivers and we get a white tile.
+    g_logoLight = new Gdiplus::Bitmap(size, size, PixelFormat32bppPARGB);
+    g_logoDark = new Gdiplus::Bitmap(size, size, PixelFormat32bppPARGB);
+    for (int pass = 0; pass < 2; pass++) {
+        Gdiplus::Bitmap* bmp = pass ? g_logoDark : g_logoLight;
+        if (!bmp || bmp->GetLastStatus() != Gdiplus::Ok) continue;
+        Gdiplus::Graphics g(bmp);
+        g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+        g.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
+        Gdiplus::SolidBrush tile(Gdiplus::Color(255, 172, 137, 232));
+        Gdiplus::RectF tr(1.5f, 1.5f, (Gdiplus::REAL)(size - 3), (Gdiplus::REAL)(size - 3));
+        Gdiplus::GraphicsPath tp;
+        AddRoundRect(tp, tr, 15.0f);
+        g.FillPath(&tile, &tp);
 
-    // Bitmap::FromHICON() loses the alpha mask (a black square on a light page),
-    // so composite the icon into a 32bpp DIB ourselves.
-    BITMAPINFO bi;
-    memset(&bi, 0, sizeof(bi));
-    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bi.bmiHeader.biWidth = size;
-    bi.bmiHeader.biHeight = -size;
-    bi.bmiHeader.biPlanes = 1;
-    bi.bmiHeader.biBitCount = 32;
-    bi.bmiHeader.biCompression = BI_RGB;
-
-    void* bits = NULL;
-    HDC screen = GetDC(NULL);
-    HBITMAP hbm = CreateDIBSection(screen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
-    HDC dc = CreateCompatibleDC(screen);
-    HBITMAP old = (HBITMAP)SelectObject(dc, hbm);
-    if (bits) memset(bits, 0, (size_t)size * size * 4);
-    DrawIconEx(dc, 0, 0, icon, size, size, 0, NULL, DI_NORMAL);
-    SelectObject(dc, old);
-    DeleteDC(dc);
-    DestroyIcon(icon);
-
-    if (hbm && bits) {
-        // Wrap the DIB only long enough to copy it out: the memory dies with hbm.
-        Gdiplus::Bitmap wrap(size, size, size * 4, PixelFormat32bppPARGB, (BYTE*)bits);
-        g_logoLight = new Gdiplus::Bitmap(size, size, PixelFormat32bppPARGB);
-        g_logoDark = new Gdiplus::Bitmap(size, size, PixelFormat32bppPARGB);
-        if (g_logoLight->GetLastStatus() == Gdiplus::Ok) {
-            Gdiplus::Graphics lg(g_logoLight);
-            lg.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
-            lg.DrawImage(&wrap, 0, 0, size, size);
-        }
-        if (g_logoDark->GetLastStatus() == Gdiplus::Ok) {
-            Gdiplus::Graphics dg(g_logoDark);
-            dg.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
-            dg.DrawImage(&wrap, 0, 0, size, size);
+        Gdiplus::Pen pen(Gdiplus::Color(255, 255, 255, 255), 3.4f);
+        pen.SetLineJoin(Gdiplus::LineJoinRound);
+        // chip body: 24-grid 4.6..19.4 mapped to 10..54
+        auto GX = [&](float v) { return 10.0f + (v - 4.6f) / 14.8f * 44.0f; };
+        Gdiplus::GraphicsPath body;
+        AddRoundRect(body, Gdiplus::RectF(GX(4.6f), GX(4.6f), GX(19.4f) - GX(4.6f), GX(19.4f) - GX(4.6f)), 4.0f);
+        g.DrawPath(&pen, &body);
+        Gdiplus::RectF inner(GX(9.4f), GX(9.4f), GX(14.6f) - GX(9.4f), GX(14.6f) - GX(9.4f));
+        g.DrawRectangle(&pen, inner);
+        for (int i = 0; i < 2; i++) {
+            float y = (i == 0) ? GX(8.6f) : GX(15.4f);
+            g.DrawLine(&pen, GX(2.4f), y, GX(4.6f), y);
+            g.DrawLine(&pen, GX(19.4f), y, GX(21.6f), y);
+            float x = (i == 0) ? GX(8.6f) : GX(15.4f);
+            g.DrawLine(&pen, x, GX(2.4f), x, GX(4.6f));
+            g.DrawLine(&pen, x, GX(19.4f), x, GX(21.6f));
         }
     }
-    if (hbm) DeleteObject(hbm);
-    ReleaseDC(NULL, screen);
     if (!g_logoLight || !g_logoDark) return;
     if (g_logoLight->GetLastStatus() != Gdiplus::Ok || g_logoDark->GetLastStatus() != Gdiplus::Ok) {
         delete g_logoLight; g_logoLight = NULL;
@@ -6361,25 +6351,7 @@ static void LoadLogoBitmaps(void)
         return;
     }
 
-    // The icon is a black outline; on a dark page the same shape has to be
-    // white. Premultiplied black is (0,0,0,a), so white premultiplied is (a,a,a).
-    Gdiplus::BitmapData bd;
-    Gdiplus::Rect rc(0, 0, size, size);
-    if (g_logoDark->LockBits(&rc, Gdiplus::ImageLockModeRead | Gdiplus::ImageLockModeWrite,
-            PixelFormat32bppPARGB, &bd) == Gdiplus::Ok) {
-        BYTE* base = (BYTE*)bd.Scan0;
-        for (int y = 0; y < size; y++) {
-            BYTE* row = base + y * bd.Stride;
-            for (int x = 0; x < size; x++) {
-                BYTE* p = row + x * 4;
-                if (p[3] == 0) continue;
-                p[0] = p[3];
-                p[1] = p[3];
-                p[2] = p[3];
-            }
-        }
-        g_logoDark->UnlockBits(&bd);
-    }
+    (void)g_logoDark;
 }
 
 // Keep the drawing scale in sync with the real client area: the window manager

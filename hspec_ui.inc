@@ -1630,9 +1630,9 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     Gdiplus::Bitmap* logo = light ? g_logoDark : g_logoLight;
     if (logo && logo->GetLastStatus() == Gdiplus::Ok) {
-        const float lz = 52 * s;
-        g.DrawImage(logo, Gdiplus::RectF(cx - lz * 0.5f,
-            cy + (74 * s - lz) * 0.5f, lz, lz));
+        // 图标自带紫色底板，按整块 74dp 铺，不再叠一层浅色方底
+        g.DrawImage(logo, Gdiplus::RectF(cx - 37 * s, cy, 74 * s, 74 * s));
+        cy += 74 * s + 16 * s;
     } else {
         DrawUiIcon(g, UI_GPU, UiCX(tile), UiCY(tile), 38 * s, u.primary);
     }
@@ -2266,10 +2266,14 @@ static bool UiHandleAction(int act)
         int idx = act - ACT_SWATCH;
         if (idx == 0) {
             g_cfg.hueFollow = 1;
+            UiToast(L"主题色 · 跟随壁纸");
         } else {
             static const int preset[5] = { 250, 190, 160, 300, 20 };
             g_cfg.hueFollow = 0;
             g_cfg.hue = preset[idx - 1];
+            wchar_t msg[64];
+            WPrintf(msg, 64, L"主题色 · Hue %d", g_cfg.hue);
+            UiToast(msg);
         }
         PanelReload(false);
         return true;
