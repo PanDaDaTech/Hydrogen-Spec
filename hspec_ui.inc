@@ -612,6 +612,18 @@ static void UiSectionTag(const UiRow& row, int diskCount, int netCount,
 
 static int g_uiMenu = 0;              // 0 none / 1 export / 2 system picker
 static Gdiplus::RectF g_uiMenuAnchor;
+static int g_uiDialog = 0;                 // 1 = 统一提示框打开
+static wchar_t g_uiDlgTitle[96];
+static wchar_t g_uiDlgBody[768];
+
+// 由页面代码调用：打开统一提示框并重绘设置窗口。
+static void UiShowDialog(const wchar_t* title, const wchar_t* body)
+{
+    wcsncpy_s(g_uiDlgTitle, 96, title ? title : L"", _TRUNCATE);
+    wcsncpy_s(g_uiDlgBody, 768, body ? body : L"", _TRUNCATE);
+    g_uiDialog = 1;
+    SettingsInvalidate();
+}
 static ULONGLONG g_toastUntil = 0;
 static wchar_t g_toastText[128] = { 0 };
 
@@ -1278,7 +1290,7 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     // ---- 面板 ----
     {
-        float h = 232 * s;
+        float h = 216 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"面板", 14.5f, FW_NORMAL, u.deepText, light, x + 18 * s, cy + 14 * s,
             200 * s, 20 * s);
@@ -1341,7 +1353,7 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
         // 位置示意图：蓝点是面板在桌面上的真实落点
         {
-            Gdiplus::RectF map(x + 18 * s, ry, 142 * s, 56 * s);
+            Gdiplus::RectF map(x + 18 * s, ry, 142 * s, 50 * s);
             Gdiplus::Pen dash(u.line, 1.0f);
             dash.SetDashStyle(Gdiplus::DashStyleDash);
             g.DrawRectangle(&dash, map.X, map.Y, map.Width, map.Height);
@@ -1390,12 +1402,12 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 static void UiMiniPreview(Gdiplus::Graphics& g, const UiStyle& u, float x, float y,
     float w, float h, int icon, bool on, float s)
 {
-    FillRound(g, MRect(x, y, w, h), 10 * s, UiClr(u.btnRegular, on ? 255 : 140));
-    UiChip(g, u, x + 11 * s, y + (h - 22 * s) * 0.5f, 22 * s, 6 * s, icon, 13 * s);
-    float tx = x + 42 * s;
-    FillRound(g, MRect(tx, y + h * 0.5f - 5.5f * s, 30 * s, 3.4f * s), 1.7f * s,
+    FillRound(g, MRect(x, y, w, h), 9 * s, UiClr(u.btnRegular, on ? 255 : 140));
+    UiChip(g, u, x + 9 * s, y + (h - 18 * s) * 0.5f, 18 * s, 5 * s, icon, 11 * s);
+    float tx = x + 33 * s;
+    FillRound(g, MRect(tx, y + h * 0.5f - 4.5f * s, 24 * s, 3.0f * s), 1.5f * s,
         UiClr(u.deepText, on ? 200 : 90));
-    FillRound(g, MRect(tx, y + h * 0.5f + 1.5f * s, 20 * s, 3.0f * s), 1.5f * s,
+    FillRound(g, MRect(tx, y + h * 0.5f + 1.5f * s, 16 * s, 2.6f * s), 1.3f * s,
         UiClr(u.deepText, on ? 120 : 60));
 }
 
@@ -1442,8 +1454,8 @@ static void PageContentUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         SText(g, d.meta, 11.5f, FW_NORMAL, u.t40, light, tx, ry + 22 * s, 340 * s, 16 * s);
 
         float swW = 44 * s;
-        UiMiniPreview(g, u, x + w - 22 * s - swW - 14 * s - 84 * s, ry, 84 * s, 48 * s,
-            d.icon, on, s);
+        UiMiniPreview(g, u, x + w - 22 * s - swW - 14 * s - 68 * s, ry + 2 * s,
+            68 * s, 40 * s, d.icon, on, s);
         UiSwitch(g, u, Gdiplus::RectF(x + w - 22 * s - swW, ry + 12 * s, swW, 24 * s),
             on, disabled, ACT_TOGGLE + d.toggle);
         cy += rowH;
@@ -1511,7 +1523,7 @@ static void PageWindowUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     // ---- 面板 ----
     {
-        float h = 44 * s + 2 * 64 * s + 8 * s;
+        float h = 44 * s + 64 * s + 8 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"面板", 14.5f, FW_NORMAL, u.deepText, light, x + 22 * s, cy + 14 * s,
             200 * s, 20 * s);
@@ -1519,17 +1531,11 @@ static void PageWindowUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             x + 68 * s, cy + 16 * s, 400 * s, 18 * s);
 
         float ry = cy + 44 * s;
-        UiSwitchRow(g, u, light, x, ry, w, L"鼠标移入时淡出",
-            L"光标压到面板上时它自动变透明，移开再回来", g_cfg.hideHover != 0, false,
-            ACT_HIDE_HOVER, s, false);
-        UiSwitchRow(g, u, light, x, ry + 64 * s, w, L"全屏应用时隐藏面板",
+        UiSwitchRow(g, u, light, x, ry, w, L"全屏应用时隐藏面板",
             L"检测到全屏窗口在前台就收起面板，退出全屏后恢复", g_cfg.hideFull != 0, false,
-            ACT_HIDE_FULL, s, true);
+            ACT_HIDE_FULL, s, false);
         cy += h + 12 * s;
     }
-
-    SText(g, L"提示：Ctrl+滚轮可以继续调透明度；隐藏主窗口不会退出程序。", 11.5f,
-        FW_NORMAL, u.t40, light, x + 2 * s, cy, w, 18 * s);
 
     UiSetContentEnd(cy + 28 * s);
 }
@@ -1811,6 +1817,42 @@ static void UiDrawToast(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
 }
 
+// 统一提示框：盖在设置窗口上的一层卡片，替代系统 MessageBox。
+static void UiDrawDialog(Gdiplus::Graphics& g, const UiStyle& u, bool light,
+    float w, float h, float s)
+{
+    if (!g_uiDialog) return;
+    g_uiHitsOff = false;
+
+    Gdiplus::SolidBrush scrim(Gdiplus::Color(110, 0, 0, 0));
+    g.FillRectangle(&scrim, Gdiplus::RectF(0, 0, w, h));
+
+    int lines = 1;
+    for (const wchar_t* p = g_uiDlgBody; *p; p++) if (*p == L'\n') lines++;
+    const float dw = 430 * s;
+    float dh = (96 + lines * 20) * s;
+    if (dh < 190 * s) dh = 190 * s;
+
+    Gdiplus::RectF box((w - dw) * 0.5f, (h - dh) * 0.5f, dw, dh);
+    FillRound(g, box, 16 * s, u.card);
+
+    SText(g, g_uiDlgTitle, 15.5f, FW_NORMAL, u.deepText, light,
+        box.X + 22 * s, box.Y + 18 * s, dw - 44 * s, 24 * s);
+    SText(g, g_uiDlgBody, 12.5f, FW_NORMAL, u.t60, light,
+        box.X + 22 * s, box.Y + 50 * s, dw - 44 * s, dh - 106 * s,
+        DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+
+    Gdiplus::RectF ok(box.X + dw - 22 * s - 86 * s, box.Y + dh - 46 * s, 86 * s, 32 * s);
+    bool hot = (g_setHot == ACT_UI_DLG_OK);
+    FillRound(g, ok, 9 * s, hot ? u.primary : u.btnRegular);
+    SText(g, L"确定", 12.5f, FW_NORMAL, u.btnContent, light,
+        ok.X, ok.Y, ok.Width, ok.Height,
+        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+    UiHitScreen(ok.X, ok.Y, ok.Width, ok.Height, ACT_UI_DLG_OK);
+    UiHitScreen(0, 0, w, h, ACT_UI_BLOCKER);
+}
+
 static void SettingsDraw(Gdiplus::Graphics& g)
 {
     // The window can end up at a different size than the one we asked for
@@ -1829,7 +1871,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
 
     g.Clear(u.page);
 
-    const bool overlay = (g_uiMenu != 0);
+    const bool overlay = (g_uiMenu != 0 || g_uiDialog != 0);
     g_uiHitsOff = overlay;
 
     UiTitlebar(g, u, light, W, s);
@@ -1909,6 +1951,8 @@ static void SettingsDraw(Gdiplus::Graphics& g)
         UiDrawSysPicker(g, u, light, W, H, s);
         HitAdd(0, 0, (int)W, (int)H, ACT_UI_BLOCKER);
     }
+
+    if (g_uiDialog) UiDrawDialog(g, u, light, W, H, s);
 
     UiDrawToast(g, u, light, W, H, s);
 }
@@ -2064,6 +2108,10 @@ static bool UiHandleAction(int act)
         g_uiMenu = 0;
         return true;
     }
+    if (act == ACT_UI_DLG_OK || act == ACT_UI_BLOCKER) {
+        if (g_uiDialog) { g_uiDialog = 0; return true; }
+    }
+
     if (act == ACT_UI_BLOCKER) {
         g_uiMenu = 0;
         return true;
@@ -2109,11 +2157,6 @@ static bool UiHandleAction(int act)
         SaveConfig();
         if (!g_cfg.showPill) HidePill();
         else if (g_setHwnd && !IsWindowVisible(g_setHwnd)) ShowPill();
-        return true;
-    }
-    if (act == ACT_HIDE_HOVER) {
-        g_cfg.hideHover = !g_cfg.hideHover;
-        SaveConfig();
         return true;
     }
     if (act == ACT_HIDE_FULL) {

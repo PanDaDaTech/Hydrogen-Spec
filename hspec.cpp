@@ -1540,7 +1540,6 @@ struct Config
     int hideTaskbar;  // 1 = 主窗口不出现在任务栏
     int hideTray;     // 1 = 不显示托盘图标（仅当任务栏入口保留时可关）
     int showPill;     // 1 = 隐藏主窗口后留下悬浮按钮
-    int hideHover;    // 1 = 鼠标移到面板上时淡出
     int hideFull;     // 1 = 全屏应用前台时隐藏面板
 };
 
@@ -1549,7 +1548,7 @@ static Config g_cfg = {
     1, 1, 1, 1, 1, 1, 1,           // cpu board mem disk gpu npu net
     1, 1, 1, 1,                    // monitor battery audio ports
     0, 0, 0,                       // lightMode / posDx / posDy
-    1, 0, 1, 1, 0                  // hideTaskbar / hideTray / showPill / hideHover / hideFull
+    1, 0, 1, 0                     // hideTaskbar / hideTray / showPill / hideFull
 };
 static wchar_t g_iniPath[MAX_PATH] = { 0 };
 
@@ -1646,7 +1645,6 @@ static void LoadConfig(void)
     g_cfg.hideTaskbar = ClampInt((int)GetPrivateProfileIntW(L"window", L"hideTaskbar", g_cfg.hideTaskbar, g_iniPath), 0, 1);
     g_cfg.hideTray = ClampInt((int)GetPrivateProfileIntW(L"window", L"hideTray", g_cfg.hideTray, g_iniPath), 0, 1);
     g_cfg.showPill = ClampInt((int)GetPrivateProfileIntW(L"window", L"showPill", g_cfg.showPill, g_iniPath), 0, 1);
-    g_cfg.hideHover = ClampInt((int)GetPrivateProfileIntW(L"window", L"hideHover", g_cfg.hideHover, g_iniPath), 0, 1);
     g_cfg.hideFull = ClampInt((int)GetPrivateProfileIntW(L"window", L"hideFull", g_cfg.hideFull, g_iniPath), 0, 1);
     // 不变量：任务栏入口都藏了，托盘图标必须留着，否则没有入口能叫回窗口。
     if (g_cfg.hideTaskbar) g_cfg.hideTray = 0;
@@ -1688,8 +1686,7 @@ static void SaveConfig(void)
         { L"hideTaskbar", g_cfg.hideTaskbar },
         { L"hideTray", g_cfg.hideTray },
         { L"showPill", g_cfg.showPill },
-        { L"hideHover", g_cfg.hideHover },
-        { L"hideFull", g_cfg.hideFull },
+            { L"hideFull", g_cfg.hideFull },
     };
     for (int i = 0; i < (int)(sizeof(win) / sizeof(win[0])); i++) {
         WPrintf(buf, 16, L"%d", win[i].value);
@@ -4317,6 +4314,7 @@ enum
     ACT_BACK = 74,       // 返回上级
     ACT_OPEN_SET = 80,   // 进入设置（二级页面）
     ACT_SETNAV = 90,     // 设置内的分页 + index
+    ACT_UI_DLG_OK = 98,  // 统一提示框：确定
     ACT_UI_BLOCKER = 99, // 弹出层打开时吞掉下层点击
     ACT_WIN_HIDE = 100,  // 标题栏：收起主窗口（留悬浮按钮）
     ACT_EXPORT = 101,    // 导出菜单
@@ -4328,7 +4326,6 @@ enum
     ACT_HIDE_TASKBAR = 130,
     ACT_HIDE_TRAY = 131,
     ACT_SHOW_PILL = 132,
-    ACT_HIDE_HOVER = 133,
     ACT_HIDE_FULL = 134,
     ACT_MINIMIZE = 135,
     ACT_AUTOSTART = 136,
@@ -6048,11 +6045,15 @@ static void PerformAction(int act)
         wchar_t path[MAX_PATH] = { 0 };
         WPrintf(path, MAX_PATH, L"%s\\系统信息_%04d%02d%02d_%02d%02d%02d.txt",
             g_saveDir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
-        if (SaveTargetInfo(path, &g_ti))
-            MessageBoxW(g_setHwnd, path, L"已保存", MB_ICONINFORMATION | MB_OK);
-        else
-            MessageBoxW(g_setHwnd, L"保存失败，请检查「文档」目录的写入权限。",
-                L"HSpec", MB_ICONWARNING | MB_OK);
+        if (SaveTargetInfo(path, &g_ti)) {
+            wchar_t done[512] = { 0 };
+            WPrintf(done, 512, L"已保存到：\n\n%s", path);
+            UiShowDialog(L"保存成功", done);
+        } else {
+            UiShowDialog(L"保存失败",
+                L"没能写入「文档\\HSpec」目录。\n\n请检查该目录的写入权限，"
+                L"或确认文档目录没有被重定向到只读位置。");
+        }
     } else if (act == ACT_OPENFOLDER) {
         EnsureSaveDir();
         if (g_saveDir[0])
@@ -6063,15 +6064,14 @@ static void PerformAction(int act)
         wchar_t msg[320] = { 0 };
         WPrintf(msg, 320, L"本机 IPv4 地址：\n\n%s",
             ip[0] ? ip : L"未检测到已连接的网络");
-        MessageBoxW(g_setHwnd, msg, L"IP 地址查看", MB_ICONINFORMATION | MB_OK);
+        UiShowDialog(L"IP 地址查看", msg);
     } else if (act == ACT_HELP) {
-        MessageBoxW(g_setHwnd,
-            L"系统信息页汇总本机的厂商、系统版本与用户目录。\n\n"
-            L"· 保存所有信息：导出到「文档\\HSpec」，文件名带时间戳；\n"
-            L"· 打开保存目录：在资源管理器中打开该目录；\n"
-            L"· IP 地址查看：显示当前联网网卡的 IPv4 地址；\n"
-            L"· 返回上级：回到外观页。",
-            L"使用说明", MB_ICONINFORMATION | MB_OK);
+        UiShowDialog(L"使用说明",
+            L"这一页汇总本机的厂商、系统版本和用户目录。\n\n"
+            L"保存所有信息：导出到「文档\\HSpec」，文件名带时间戳。\n"
+            L"打开保存目录：在资源管理器里定位到该目录。\n"
+            L"IP 地址查看：显示当前联网网卡的 IPv4 地址。\n"
+            L"返回上级：回到外观页。");
     } else if (act == ACT_GITHUB) {
         ShellExecuteW(NULL, L"open", L"https://github.com/PanDaTech/Hydrogen-Spec", NULL, NULL,
             SW_SHOWNORMAL);
@@ -6131,6 +6131,7 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
 
     case WM_KEYDOWN:
         if (wParam == VK_ESCAPE) {
+            if (g_uiDialog) { g_uiDialog = 0; SettingsInvalidate(); return 0; }
             if (g_uiMenu) { g_uiMenu = 0; SettingsInvalidate(); return 0; }
             PostMessageW(hwnd, WM_CLOSE, 0, 0);
             return 0;
@@ -7169,13 +7170,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             // cursor.  Over the panel -> fade out; off it -> fade back in.
             if (g_hwnd) {
                 int want = 255;
-                if (g_cfg.hideHover) {
-                    POINT pt;
-                    GetCursorPos(&pt);
-                    RECT rc;
-                    GetWindowRect(g_hwnd, &rc);
-                    if (PtInRect(&rc, pt)) want = 0;
-                }
                 if (g_cfg.hideFull && IsFullscreenAppForeground()) want = 0;
                 if (want != g_hoverTarget) {
                     g_hoverTarget = want;
@@ -7338,6 +7332,7 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
 
     HANDLE mutex = NULL;
     if (!headlessDump) {
+        SetLastError(0);
         mutex = CreateMutexW(NULL, FALSE, L"HSpec_Singleton");
         if (mutex && GetLastError() == ERROR_ALREADY_EXISTS) {
             CloseHandle(mutex);
