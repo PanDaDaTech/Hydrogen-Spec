@@ -98,7 +98,9 @@ enum UiIcon
     UI_MONITOR, UI_BATTERY, UI_AUDIO, UI_PLUG, UI_REFRESH, UI_COPY, UI_DOC,
     UI_GEAR, UI_BACK, UI_RING, UI_WINDOW, UI_EYE_OFF, UI_MIN, UI_CLOSE,
     UI_CHEVRON, UI_CARET, UI_UP, UI_DOWN, UI_LEFT, UI_RIGHT, UI_CHECK,
-    UI_IMAGE, UI_CODE, UI_INFO, UI_CLOCK, UI_EXPORT, UI_COUNT_
+    UI_IMAGE, UI_CODE, UI_INFO, UI_CLOCK, UI_EXPORT,
+    UI_TAB_HW, UI_TAB_SYS, UI_TAB_LOOK, UI_TAB_CONTENT, UI_TAB_WINDOW, UI_TAB_ABOUT,
+    UI_COUNT_
 };
 
 static void UiRoundRectPath(Gdiplus::GraphicsPath& p, float x, float y, float w, float h, float r)
@@ -156,13 +158,12 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
 
     switch (icon) {
     case UI_CPU:
-        // mockup i-cpu：芯片方框 + 内核方框 + 每边三根引脚
         Rect(5, 5, 14, 14, 2);
         Rect(9.5f, 9.5f, 5, 5, 0.6f);
-        Line(8, 2, 8, 5); Line(12, 2, 12, 5); Line(16, 2, 16, 5);
-        Line(8, 19, 8, 22); Line(12, 19, 12, 22); Line(16, 19, 16, 22);
-        Line(2, 8, 5, 8); Line(2, 12, 5, 12); Line(2, 16, 5, 16);
-        Line(19, 8, 22, 8); Line(19, 12, 22, 12); Line(19, 16, 22, 16);
+        Line(9, 2.4f, 9, 5); Line(15, 2.4f, 15, 5);
+        Line(9, 19, 9, 21.6f); Line(15, 19, 15, 21.6f);
+        Line(2.4f, 9, 5, 9); Line(2.4f, 15, 5, 15);
+        Line(19, 9, 21.6f, 9); Line(19, 15, 21.6f, 15);
         break;
     case UI_BOARD:
         Rect(2.5f, 4, 19, 16, 2);
@@ -280,6 +281,55 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
             Line((float)(12 + cos(a) * 6.4), (float)(12 + sin(a) * 6.4),
                  (float)(12 + cos(a) * 8.6), (float)(12 + sin(a) * 8.6));
         }
+        break;
+    case UI_TAB_HW:
+        // 硬件显示：芯片
+        Rect(4.6f, 4.6f, 14.8f, 14.8f, 2.6f);
+        Rect(9.6f, 9.6f, 4.8f, 4.8f, 1.0f);
+        Line(8.6f, 2.4f, 8.6f, 4.6f); Line(15.4f, 2.4f, 15.4f, 4.6f);
+        Line(8.6f, 19.4f, 8.6f, 21.6f); Line(15.4f, 19.4f, 15.4f, 21.6f);
+        Line(2.4f, 8.6f, 4.6f, 8.6f); Line(2.4f, 15.4f, 4.6f, 15.4f);
+        Line(19.4f, 8.6f, 21.6f, 8.6f); Line(19.4f, 15.4f, 21.6f, 15.4f);
+        break;
+    case UI_TAB_SYS:
+        // 目标系统信息：两块叠起来的盘位 + 指示灯
+        Rect(3, 5.6f, 18, 6.2f, 1.8f);
+        Rect(3, 12.2f, 18, 6.2f, 1.8f);
+        { Gdiplus::SolidBrush b(col);
+          g.FillEllipse(&b, X(5.4f), Y(7.9f), 1.8f * k, 1.8f * k);
+          g.FillEllipse(&b, X(5.4f), Y(14.5f), 1.8f * k, 1.8f * k); }
+        Line(9.4f, 8.7f, 18.2f, 8.7f);
+        Line(9.4f, 15.3f, 18.2f, 15.3f);
+        break;
+    case UI_TAB_LOOK: {
+        // 外观：明暗各半的圆
+        Ell(12, 12, 8.2f);
+        Gdiplus::SolidBrush b(col);
+        g.FillPie(&b, X(3.8f), Y(3.8f), 16.4f * k, 16.4f * k, -90, 180);
+        break;
+    }
+    case UI_TAB_CONTENT:
+        // 显示内容：清单 —— 三个方框 + 三条文字线
+        Rect(3.4f, 5.6f, 4.6f, 4.6f, 1.2f);
+        Rect(3.4f, 10.4f, 4.6f, 4.6f, 1.2f);
+        Rect(3.4f, 15.2f, 4.6f, 4.6f, 1.2f);
+        Line(11, 7.9f, 20.4f, 7.9f);
+        Line(11, 12.7f, 20.4f, 12.7f);
+        Line(11, 17.5f, 17.4f, 17.5f);
+        break;
+    case UI_TAB_WINDOW:
+        // 窗口：带标题栏的窗口
+        Rect(3, 4.4f, 18, 15.2f, 2.6f);
+        Line(3, 9.4f, 21, 9.4f);
+        { Gdiplus::SolidBrush b(col);
+          g.FillEllipse(&b, X(5.6f), Y(6.4f), 1.8f * k, 1.8f * k); }
+        break;
+    case UI_TAB_ABOUT:
+        // 关于：圆圈里的 i
+        Ell(12, 12, 8.4f);
+        { Gdiplus::SolidBrush b(col);
+          g.FillEllipse(&b, X(11.0f), Y(7.2f), 2.0f * k, 2.0f * k); }
+        Line(12, 11, 12, 16.6f);
         break;
     case UI_BACK:
         Line(20, 12, 4.4f, 12);
@@ -1717,7 +1767,7 @@ static void UiRail(Gdiplus::Graphics& g, const UiStyle& u, bool light, float h, 
 
     if (g_setMode == 0) {
         struct { int icon; const wchar_t* label; } items[2] = {
-            { UI_GPU, L"硬件显示" }, { UI_DOC, L"目标系统信息" },
+            { UI_TAB_HW, L"硬件显示" }, { UI_TAB_SYS, L"目标系统信息" },
         };
         for (int i = 0; i < 2; i++) {
             UiRailItem(g, u, light, x, y, w, s, items[i].icon, items[i].label,
@@ -1731,8 +1781,8 @@ static void UiRail(Gdiplus::Graphics& g, const UiStyle& u, bool light, float h, 
             g_setHot == ACT_BACK, ACT_BACK);
         y += 48 * s;
         struct { int icon; const wchar_t* label; } items[4] = {
-            { UI_RING, L"外观" }, { UI_RAM, L"显示内容" }, { UI_WINDOW, L"窗口" },
-            { UI_INFO, L"关于" },
+            { UI_TAB_LOOK, L"外观" }, { UI_TAB_CONTENT, L"显示内容" },
+            { UI_TAB_WINDOW, L"窗口" }, { UI_TAB_ABOUT, L"关于" },
         };
         for (int i = 0; i < 4; i++) {
             UiRailItem(g, u, light, x, y, w, s, items[i].icon, items[i].label,
