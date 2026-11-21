@@ -6807,7 +6807,7 @@ static void DrawTrayItem(const DRAWITEMSTRUCT* d)
                               : Gdiplus::Color(255, 96, 110, 235), 1.7f * s);
         pen.SetStartCap(Gdiplus::LineCapRound);
         pen.SetEndCap(Gdiplus::LineCapRound);
-        float cx = rc.X + 15 * s, cy = rc.Y + rc.Height * 0.5f;
+        float cx = rc.X + 18 * s, cy = rc.Y + rc.Height * 0.5f;
         g.DrawLine(&pen, cx - 3.2f * s, cy, cx - 0.8f * s, cy + 2.4f * s);
         g.DrawLine(&pen, cx - 0.8f * s, cy + 2.4f * s, cx + 4 * s, cy - 3 * s);
     }
@@ -6815,8 +6815,8 @@ static void DrawTrayItem(const DRAWITEMSTRUCT* d)
     Gdiplus::Color tc = dim ? Gdiplus::Color(255, 128, 130, 139)
                             : Gdiplus::Color(255, 233, 234, 238);
     bool darkInk = ((int)tc.GetR() + (int)tc.GetG() + (int)tc.GetB()) < 384;
-    DrawTextGdiLine(g, text, 13, FW_NORMAL, tc, darkInk,
-        (int)(rc.X + 32 * s), (int)rc.Y, (int)(rc.Width - 44 * s), (int)rc.Height,
+    DrawTextGdiLine(g, text, 15, FW_NORMAL, tc, darkInk,
+        (int)(rc.X + 34 * s), (int)rc.Y, (int)(rc.Width - 46 * s), (int)rc.Height,
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
         (double)s);
 }
@@ -6843,10 +6843,10 @@ static bool SaveMenuPng(const wchar_t* path)
     };
 
     const float s = (float)(g_dpi ? g_dpi : 96) / 96.0f;
-    const int W = (int)(212.0f * s);
+    const int W = (int)(244.0f * s);
     int H = (int)(8 * s);
     for (int i = 0; i < (int)(sizeof(kRows) / sizeof(kRows[0])); i++)
-        H += (int)((kRows[i].text ? 34.0f : 10.0f) * s);
+        H += (int)((kRows[i].text ? 40.0f : 12.0f) * s);
 
     BITMAPINFO bi;
     memset(&bi, 0, sizeof(bi));
@@ -6873,7 +6873,7 @@ static bool SaveMenuPng(const wchar_t* path)
 
     int y = (int)(4 * s);
     for (int i = 0; i < (int)(sizeof(kRows) / sizeof(kRows[0])); i++) {
-        int h = (int)((kRows[i].text ? 34.0f : 10.0f) * s);
+        int h = (int)((kRows[i].text ? 40.0f : 12.0f) * s);
         DRAWITEMSTRUCT d;
         memset(&d, 0, sizeof(d));
         d.CtlType = ODT_MENU;
@@ -6911,8 +6911,8 @@ static LRESULT CALLBACK MenuOwnerProc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (mis && mis->CtlType == ODT_MENU) {
             const unsigned dpi = g_dpi ? g_dpi : 96;
             const float ds = (float)dpi / 96.0f;
-            mis->itemHeight = (UINT)((mis->itemData ? 34.0f : 10.0f) * ds);
-            mis->itemWidth = (UINT)(212.0f * ds);
+            mis->itemHeight = (UINT)((mis->itemData ? 40.0f : 12.0f) * ds);
+            mis->itemWidth = (UINT)(244.0f * ds);
             return TRUE;
         }
     } else if (m == WM_DRAWITEM) {
