@@ -239,15 +239,15 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
     case UI_REFRESH: {
         // 断口在右上，箭头贴在断口上沿、沿切线方向，16px 下仍能读出“转一圈”。
         // 顺时针：(350° 起画 280°) 收到正上方，箭头在断口里指向右，和环的末端接上。
-        g.DrawArc(&pen, X(3.9f), Y(3.9f), 16.2f * k, 16.2f * k, 350, 280);
+        g.DrawArc(&pen, X(3.9f), Y(3.9f), 16.2f * k, 16.2f * k, 340, 290);
         Gdiplus::Color rc;
         pen.GetColor(&rc);
         Gdiplus::SolidBrush rb(rc);
         Gdiplus::GraphicsPath tri;
         { Gdiplus::PointF tp[3] = {
-            Gdiplus::PointF(X(16.9f), Y(4.5f)),
-            Gdiplus::PointF(X(11.9f), Y(2.1f)),
-            Gdiplus::PointF(X(11.9f), Y(6.9f)) };
+            Gdiplus::PointF(X(18.3f), Y(4.6f)),
+            Gdiplus::PointF(X(12.1f), Y(1.7f)),
+            Gdiplus::PointF(X(12.1f), Y(7.5f)) };
           tri.AddPolygon(tp, 3); }
         g.FillPath(&rb, &tri);
         break;
