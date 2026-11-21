@@ -6526,6 +6526,30 @@ static void PillPlace(void)
     const int size = (int)(48 * ps + 0.5f);
     int x = mi.rcWork.right - size - (int)(18 * ps);
     int y = mi.rcWork.bottom - size - (int)(18 * ps);
+
+    // 任务栏自动隐藏时 rcWork 等于整屏，悬浮球会正好压在时钟上；这时按任务栏
+    // 展开后的高度再让出一点。
+    APPBARDATA abd;
+    memset(&abd, 0, sizeof(abd));
+    abd.cbSize = sizeof(abd);
+    DWORD barState = (DWORD)SHAppBarMessage(ABM_GETSTATE, &abd);
+    RECT barRc = { 0, 0, 0, 0 };
+    UINT edge = ABE_BOTTOM;
+    if (SHAppBarMessage(ABM_GETTASKBARPOS, &abd)) {
+        barRc = abd.rc;
+        edge = abd.uEdge;
+    }
+    const int gap = (int)(12 * ps);
+    if (edge == ABE_BOTTOM) {
+        int limit = barRc.top;
+        if (barState & ABS_AUTOHIDE) limit = mi.rcMonitor.bottom - (int)(56 * ps);
+        if (y + size > limit - gap) y = limit - gap - size;
+    }
+    if (edge == ABE_RIGHT) {
+        int limit = barRc.left;
+        if (barState & ABS_AUTOHIDE) limit = mi.rcMonitor.right - (int)(56 * ps);
+        if (x + size > limit - gap) x = limit - gap - size;
+    }
     SetWindowPos(g_pillHwnd, HWND_TOPMOST, x, y, size, size,
         SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
