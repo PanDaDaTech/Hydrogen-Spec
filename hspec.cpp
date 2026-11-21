@@ -1544,7 +1544,7 @@ struct Config
 };
 
 static Config g_cfg = {
-    THEME_PLAIN, 1, 250, 65, 5,    // theme / hueFollow / hue / opacity / radius
+    THEME_PLAIN, 0, 300, 65, 5,    // theme / hueFollow / hue / opacity / radius
     1, 1, 1, 1, 1, 1, 1,           // cpu board mem disk gpu npu net
     1, 1, 1, 1,                    // monitor battery audio ports
     0, 0, 0,                       // lightMode / posDx / posDy
@@ -2747,8 +2747,7 @@ static void BuildModel(void)
     memset(disks, 0, sizeof(disks));
     int dc = EnumDisks(disks, 6);
     if (dc == 0) {
-        r = ModelAddRow(ICON_DISK, L"硬盘：未检测到");
-        (void)r;
+        // 没有磁盘就整节不出现，不留「未检测到」占位。
     } else {
         for (int i = 0; i < dc; i++) {
             wchar_t title[200];
@@ -4310,6 +4309,7 @@ enum
     ACT_TOGGLE = 40,     // + toggle index
     ACT_GITHUB = 50,
     ACT_COPYVER = 51,
+    ACT_LICENSE = 137,
     ACT_POS = 60,        // + 0 up / 1 down / 2 left / 3 right / 4 reset
     ACT_SAVEINFO = 70,   // 保存所有信息
     ACT_OPENFOLDER = 71, // 打开保存目录

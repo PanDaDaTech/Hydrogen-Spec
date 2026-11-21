@@ -1279,28 +1279,24 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     // ---- 主题色 ----
     {
-        float h = 214 * s;
+        float h = 190 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"主题色", 14.5f, FW_NORMAL, u.deepText, light, x + 18 * s, cy + 14 * s,
             200 * s, 20 * s);
 
         float ry = cy + 44 * s;
         SText(g, L"明暗模式", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, 120 * s, 20 * s);
-        SText(g, L"跟随系统时读注册表的 AppsUseLightTheme", 11.5f, FW_NORMAL, u.t40, light,
-            x + 18 * s, ry + 21 * s, 300 * s, 16 * s);
         const wchar_t* modes[3] = { L"跟随系统", L"浅色", L"深色" };
         // 控件与「标题 + 说明」两行整体垂直居中，而不是顶着标题行。
-        UiSegmented(g, u, light, x + w - 18 * s - 240 * s, ry + 5 * s, 240 * s, 30 * s,
+        UiSegmented(g, u, light, x + w - 18 * s - 240 * s, ry - 5 * s, 240 * s, 30 * s,
             modes, 3, g_cfg.lightMode, ACT_LIGHT);
 
-        ry += 52 * s;
+        ry += 44 * s;
         SText(g, L"跟随壁纸取色", 13, FW_NORMAL, u.t60, light, x + 18 * s, ry, 200 * s, 20 * s);
-        SText(g, L"从壁纸采样主色，换算成 oklch 的 hue", 11.5f, FW_NORMAL, u.t40, light,
-            x + 18 * s, ry + 21 * s, 300 * s, 16 * s);
-        UiSwitch(g, u, Gdiplus::RectF(x + w - 18 * s - 44 * s, ry + 8 * s, 44 * s, 24 * s),
+        UiSwitch(g, u, Gdiplus::RectF(x + w - 18 * s - 44 * s, ry - 2 * s, 44 * s, 24 * s),
             g_cfg.hueFollow != 0, false, ACT_HUE_FOLLOW);
 
-        ry += 52 * s;
+        ry += 40 * s;
         float stripW = w - 36 * s;
         Gdiplus::RectF strip(x + 18 * s, ry, stripW, 22 * s);
         {
@@ -1338,9 +1334,7 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             wchar_t meta[96];
             WPrintf(meta, 96, L"Hue %d · %s", HueDeg(),
                 g_cfg.hueFollow ? L"取自壁纸" : L"手动");
-            SText(g, meta, 11.5f, FW_NORMAL, u.t40, light, x + 18 * s, ry, 130 * s, 18 * s);
-            SText(g, L"拖动或点选，整窗中性色跟着走", 11.5f, FW_NORMAL, u.t40, light,
-                x + 148 * s, ry, 260 * s, 18 * s);
+            SText(g, meta, 11.5f, FW_NORMAL, u.t40, light, x + 18 * s, ry, 220 * s, 18 * s);
         }
         {
             static const int preset[5] = { 250, 190, 160, 300, 20 };
@@ -1455,12 +1449,7 @@ static void PageLookUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
                 map.Y + map.Height * py / 100.0f - 3.5f * s, 26 * s, 7 * s);
             FillRound(g, dot, 3.5f * s, u.primary);
 
-            SText(g, L"蓝点是面板落点，箭头每次移动 8 dp，复位回到设定的角；",
-                11.5f, FW_NORMAL, u.t40, light, map.GetRight() + 16 * s, map.Y + 6 * s,
-                w - (map.Width + 52 * s), 18 * s);
-            SText(g, L"换分辨率后按比例还原，不会跑到屏幕外。",
-                11.5f, FW_NORMAL, u.t40, light, map.GetRight() + 16 * s, map.Y + 26 * s,
-                w - (map.Width + 52 * s), 18 * s);
+
         }
         cy += h + 12 * s;
     }
@@ -1492,7 +1481,7 @@ static void PageContentUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         { UI_CPU, TOGGLE_CPU, L"处理器", L"核心 / 线程 / 缓存" },
         { UI_BOARD, TOGGLE_BOARD, L"主板与固件", L"厂商 / 固件版本 / 启动方式 / 证书" },
         { UI_RAM, TOGGLE_MEM, L"内存", L"品牌 / 频率 / 容量 / 类型" },
-        { UI_VGA, TOGGLE_GPU, L"显卡", L"型号 / 显存（空表示仅显示检测到的显卡）" },
+        { UI_VGA, TOGGLE_GPU, L"显卡", L"型号 / 显存" },
         { UI_NPU, TOGGLE_NPU, L"NPU", L"仅显示已检测到的加速器" },
         { UI_MONITOR, TOGGLE_MONITOR, L"显示器", L"尺寸 / 分辨率 / 刷新率" },
         { UI_DISK, TOGGLE_DISK, L"硬盘", L"容量 / 分区格式 / 总线" },
@@ -1534,13 +1523,7 @@ static void PageContentUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         cy += rowH;
     }
 
-    float noteY = y + cardH + 12 * s;
-    SText(g, L"这些开关只影响桌面面板；硬件信息页始终展示完整资料，缺什么就写「—」。",
-        11.5f, FW_NORMAL, u.t40, light, x + 2 * s, noteY, w, 18 * s);
-    SText(g, L"NPU 一行跟随硬件：本机没有加速器时保持关闭且不可切换。",
-        11.5f, FW_NORMAL, u.t40, light, x + 2 * s, noteY + 18 * s, w, 18 * s);
-
-    UiSetContentEnd(noteY + 40 * s);
+    UiSetContentEnd(y + cardH + 16 * s);
 }
 
 // ---------------------------------------------------------------------------
@@ -1570,47 +1553,43 @@ static void PageWindowUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     // ---- 窗口 ----
     {
-        float h = 44 * s + 4 * 64 * s + 8 * s;
+        float h = 40 * s + 4 * 58 * s + 8 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
-        SText(g, L"窗口", 14.5f, FW_NORMAL, u.deepText, light, x + 22 * s, cy + 14 * s,
+        SText(g, L"窗口", 14.5f, FW_NORMAL, u.deepText, light, x + 22 * s, cy + 12 * s,
             200 * s, 20 * s);
-        SText(g, L"决定主窗口在哪里留下入口，设置窗口始终留一个回家的按钮", 11.5f, FW_NORMAL,
-            u.t40, light, x + 68 * s, cy + 16 * s, 460 * s, 18 * s);
 
-        float ry = cy + 44 * s;
+        float ry = cy + 40 * s;
         UiSwitchRow(g, u, light, x, ry, w, L"隐藏任务栏窗口",
             L"主窗口不进入任务栏，只从托盘或悬浮按钮唤回", g_cfg.hideTaskbar != 0,
             false, ACT_HIDE_TASKBAR, s, false);
-        UiSwitchRow(g, u, light, x, ry + 64 * s, w, L"隐藏托盘图标",
+        UiSwitchRow(g, u, light, x, ry + 58 * s, w, L"隐藏托盘图标",
             g_cfg.hideTaskbar ? L"任务栏入口已隐藏，托盘必须保留"
                               : L"关掉任务栏入口后才能隐藏托盘图标",
             g_cfg.hideTray != 0, g_cfg.hideTaskbar != 0, ACT_HIDE_TRAY, s, true);
-        UiSwitchRow(g, u, light, x, ry + 128 * s, w, L"显示悬浮按钮",
+        UiSwitchRow(g, u, light, x, ry + 116 * s, w, L"显示悬浮按钮",
             L"主窗口收起后在桌面右下角留一个小按钮，点一下重新打开设置",
             g_cfg.showPill != 0, false, ACT_SHOW_PILL, s, true);
-        UiSwitchRow(g, u, light, x, ry + 192 * s, w, L"开机启动",
+        UiSwitchRow(g, u, light, x, ry + 174 * s, w, L"开机启动",
             L"登录 Windows 后自动在桌面层铺好面板",
             AutoStartEnabled(), false, ACT_AUTOSTART, s, true);
-        cy += h + 12 * s;
+        cy += h + 10 * s;
     }
 
     // ---- 面板 ----
     {
-        float h = 44 * s + 64 * s + 8 * s;
+        float h = 40 * s + 58 * s + 8 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
-        SText(g, L"面板", 14.5f, FW_NORMAL, u.deepText, light, x + 22 * s, cy + 14 * s,
+        SText(g, L"面板", 14.5f, FW_NORMAL, u.deepText, light, x + 22 * s, cy + 12 * s,
             200 * s, 20 * s);
-        SText(g, L"桌面层上的行为，只影响那张半透明卡片", 11.5f, FW_NORMAL, u.t40, light,
-            x + 68 * s, cy + 16 * s, 400 * s, 18 * s);
 
-        float ry = cy + 44 * s;
+        float ry = cy + 40 * s;
         UiSwitchRow(g, u, light, x, ry, w, L"全屏应用时隐藏面板",
             L"检测到全屏窗口在前台就收起面板，退出全屏后恢复", g_cfg.hideFull != 0, false,
             ACT_HIDE_FULL, s, false);
-        cy += h + 12 * s;
+        cy += h + 10 * s;
     }
 
-    UiSetContentEnd(cy + 28 * s);
+    UiSetContentEnd(cy + 20 * s);
 }
 
 // ---------------------------------------------------------------------------
@@ -1620,68 +1599,86 @@ static void PageWindowUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     float x, float y, float w, float s)
 {
-    float cx = x + w * 0.5f;
-    float cy = y + 34 * s;
+    // 结构照 Hydrogen-Keyboard 的关于页：产品卡 + 入口卡 + 许可/信息卡 + 版权行。
+    const float padX = 20 * s;
+    const float padY = 14 * s;
+    const float gap = 8 * s;
+    float cy = y + 6 * s;
 
-    Gdiplus::Bitmap* logo = light ? g_logoDark : g_logoLight;
-    Gdiplus::RectF tile(cx - 37 * s, cy, 74 * s, 74 * s);
-    if (logo && logo->GetLastStatus() == Gdiplus::Ok) {
-        // 图标自带紫色底板，整块铺满，不再垫任何底色
-        g.DrawImage(logo, Gdiplus::RectF(cx - 32 * s, cy + 5 * s, 64 * s, 64 * s));
-    } else {
-        FillRound(g, tile, 20 * s, UiClr(u.primary, 26));
-        DrawUiIcon(g, UI_GPU, UiCX(tile), UiCY(tile), 38 * s, u.primary);
-    }
-    cy += 74 * s + 16 * s;
-
-    SText(g, L"轻谱 Hydrogen Spec", 20, FW_NORMAL, u.deepText, light, x, cy, w, 28 * s,
-        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-    cy += 32 * s;
-    SText(g, L"v1.0 · x64 · MIT License", 12, FW_NORMAL, u.t40, light, x, cy, w, 18 * s,
-        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-    cy += 26 * s;
-    SText(g, L"把机器的全部参数摊在桌面上——看得见，读得懂。", 12.5f, FW_NORMAL, u.t50,
-        light, x, cy, w, 20 * s,
-        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-    cy += 30 * s;
-
-    float bw = 118 * s, bh = 34 * s, gap = 10 * s;
-    float bx = cx - bw - gap * 0.5f;
-    UiButton(g, u, light, bx, cy, bw, bh, L"GitHub 仓库", UI_CODE, false,
-        g_setHot == ACT_GITHUB, ACT_GITHUB);
-    UiButton(g, u, light, bx + bw + gap, cy, bw, bh, L"复制版本信息", UI_COPY, false,
-        g_setHot == ACT_COPYVER, ACT_COPYVER);
-    cy += bh + 30 * s;
-
-    SText(g, L"MIT License · 单文件 · 不联网", 11, FW_NORMAL, u.t40, light, x, cy, w, 16 * s,
-        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-    cy += 26 * s;
-
-    // 信息卡
-    float cardH = 3 * 30 * s + 20 * s;
-    UiCard(g, u, Gdiplus::RectF(x + 40 * s, cy, w - 80 * s, cardH), s);
-    struct KV { const wchar_t* k; const wchar_t* v; };
-    const KV rows[3] = {
-        { L"界面字体", L"MiSans Medium 子集 · 内嵌" },
-        { L"数据来源", L"SMBIOS / UEFI 变量 / 注册表 / 物理磁盘 IOCTL" },
-        { L"运行方式", L"单文件 · 静默 · 不联网" },
-    };
-    for (int i = 0; i < 3; i++) {
-        float ry = cy + 10 * s + i * 30 * s;
-        float labelX = x + 62 * s;
-        float labelW = 0;
-        for (int j = 0; j < 3; j++) {
-            float pw = (float)UiTextW(rows[j].k, 12.0f);
-            if (pw > labelW) labelW = pw;
+    // ---- 产品卡 ----
+    {
+        float h = 56 * s + padY * 2;
+        UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
+        Gdiplus::RectF mark(x + padX, cy + padY, 56 * s, 56 * s);
+        Gdiplus::Bitmap* logo = light ? g_logoDark : g_logoLight;
+        if (logo && logo->GetLastStatus() == Gdiplus::Ok) {
+            g.DrawImage(logo, mark);
+        } else {
+            FillRound(g, mark, 13 * s, u.primary);
+            DrawUiIcon(g, UI_GPU, UiCX(mark), UiCY(mark), 30 * s,
+                Gdiplus::Color(255, 255, 255, 255));
         }
-        labelW += 18 * s;
-        SText(g, rows[i].k, 12, FW_NORMAL, u.t50, light, labelX, ry, labelW, 20 * s);
-        SText(g, rows[i].v, 12, FW_NORMAL, u.t90, light, labelX + labelW, ry,
-            w - 80 * s - (labelW + 42 * s), 20 * s);
+        float tx = mark.GetRight() + 14 * s;
+        float tw = x + w - padX - tx;
+        SText(g, L"轻谱 Hydrogen Spec", 16.5f, FW_NORMAL, u.deepText, light, tx,
+            cy + padY + 7 * s, tw, 24 * s);
+        SText(g, L"把机器的全部参数摊在桌面上 · v1.0 · x64", 11.5f, FW_NORMAL, u.t40,
+            light, tx, cy + padY + 32 * s, tw, 18 * s);
+        cy += h + gap;
     }
-    cy += cardH;
 
-    UiSetContentEnd(cy + 10 * s);
+    // ---- 项目地址：右侧两个圆形入口 ----
+    {
+        float h = 56 * s + padY * 2;
+        UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
+        SText(g, L"项目地址", 13.5f, FW_NORMAL, u.deepText, light, x + padX,
+            cy + padY + 3 * s, 320 * s, 20 * s);
+        SText(g, L"源码、版本发布与使用说明", 11.5f, FW_NORMAL, u.t40, light,
+            x + padX, cy + padY + 24 * s, 420 * s, 16 * s);
+        float bw = 34 * s;
+        float by = cy + (h - bw) * 0.5f;
+        float bx = x + w - padX - bw;
+        UiIconButton(g, u, bx, by, bw, bw, UI_CODE, 17 * s,
+            g_setHot == ACT_GITHUB, ACT_GITHUB, u.btnRegular, u.t60);
+        UiIconButton(g, u, bx - bw - 8 * s, by, bw, bw, UI_COPY, 17 * s,
+            g_setHot == ACT_COPYVER, ACT_COPYVER, u.btnRegular, u.t60);
+        cy += h + gap;
+    }
+
+    // ---- 许可与运行信息 ----
+    {
+        const float rowH = 36 * s;
+        float h = padY * 2 + rowH * 3;
+        UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
+        float ry = cy + padY;
+        float kx = x + padX + 96 * s;
+
+        SText(g, L"开源许可", 12.5f, FW_NORMAL, u.t50, light, x + padX, ry + 8 * s,
+            96 * s, 20 * s);
+        SText(g, L"MIT", 12.5f, FW_NORMAL, u.t90, light, kx, ry + 8 * s, 200 * s, 20 * s);
+        UiButton(g, u, light, x + w - padX - 62 * s, ry + 3 * s, 62 * s, 30 * s,
+            L"查看", -1, false, g_setHot == ACT_LICENSE, ACT_LICENSE);
+        ry += rowH;
+
+        SText(g, L"界面字体", 12.5f, FW_NORMAL, u.t50, light, x + padX, ry + 8 * s,
+            96 * s, 20 * s);
+        SText(g, L"MiSans Medium 子集 · 内嵌", 12.5f, FW_NORMAL, u.t90, light, kx,
+            ry + 8 * s, w - (kx - x) - padX, 20 * s);
+        ry += rowH;
+
+        SText(g, L"运行方式", 12.5f, FW_NORMAL, u.t50, light, x + padX, ry + 8 * s,
+            96 * s, 20 * s);
+        SText(g, L"单文件 · 静默 · 不联网", 12.5f, FW_NORMAL, u.t90, light, kx,
+            ry + 8 * s, w - (kx - x) - padX, 20 * s);
+        cy += h + 14 * s;
+    }
+
+    SText(g, L"Copyright 2019-2026 PanDaTech. All Rights Reserved.", 11, FW_NORMAL,
+        u.t40, light, x, cy, w, 18 * s,
+        DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    cy += 26 * s;
+
+    UiSetContentEnd(cy);
 }
 
 // ---------------------------------------------------------------------------
@@ -1967,7 +1964,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
         if (g_mainTab == 0) { title = L"硬件信息"; sub = L"汇总本机型号、系统和关键硬件参数"; }
         else { title = L"目标系统信息"; sub = L"查看并保存本机磁盘上每个系统的资料"; }
     } else if (g_setPage == 0) { title = L"外观"; sub = L"配色、明暗与圆角，改完立即生效"; }
-    else if (g_setPage == 1) { title = L"显示内容"; sub = L"只决定面板上显示什么，硬件信息页始终是完整资料"; }
+        else if (g_setPage == 1) { title = L"显示内容"; sub = L"设置面板上你想要显示的内容"; }
     else if (g_setPage == 2) { title = L"窗口"; sub = L"主窗口的入口与桌面层行为"; }
     else { title = L""; sub = L""; }
 
@@ -2296,6 +2293,18 @@ static bool UiHandleAction(int act)
     if (act == ACT_COPYVER) {
         CopyVersionToClipboard();
         UiToast(L"已复制版本信息");
+        return true;
+    }
+    if (act == ACT_LICENSE) {
+        UiShowDialog(L"开源许可",
+            L"MIT License\n\n"
+            L"Copyright (c) 2019-2026 PanDaTech\n\n"
+            L"特此免费授予任何获得本软件及相关文档文件副本的人不受限制地处理本软件的权利，"
+            L"包括不受限制地使用、复制、修改、合并、发布、分发、再许可和/或销售本软件副本的权利，"
+            L"并允许获得本软件的人这样做，但须满足以下条件：\n\n"
+            L"上述版权声明和本许可声明应包含在本软件的所有副本或主要部分中。\n\n"
+            L"本软件按「原样」提供，不附任何明示或暗示的担保，包括但不限于适销性、"
+            L"特定用途适用性和非侵权的担保。");
         return true;
     }
     return false;
