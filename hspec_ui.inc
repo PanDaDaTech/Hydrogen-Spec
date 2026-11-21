@@ -1683,30 +1683,21 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         cy += h + gap;
     }
 
-    // ---- 项目地址：两行链接，右侧各一个跳转按钮 ----
+    // ---- 项目地址：一行标题，右侧并排两个跳转按钮 ----
     {
-        const float rowH = 40 * s;
-        float h = padY * 2 + 24 * s + rowH * 2;
+        float h = padY * 2 + 36 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"项目地址", 13.5f, FW_NORMAL, u.deepText, light, x + padX,
-            cy + padY, 160 * s, 18 * s);
+            cy + padY + 9 * s, 200 * s, 18 * s);
 
-        float ry = cy + padY + 24 * s;
         const float bw = 32 * s;
-        struct LinkRow { const wchar_t* title; UiIcon icon; int act; };
-        const LinkRow rows[2] = {
-            { L"仓库地址", UI_GITHUB, ACT_GITHUB },
-            { L"博客地址", UI_NET, ACT_BLOG },
-        };
-        for (int i = 0; i < 2; i++) {
-            float y0 = ry + i * rowH;
-            // 不显示地址本身，只留一行标题和一个跳转按钮。
-            SText(g, rows[i].title, 12.5f, FW_NORMAL, u.t75, light, x + padX,
-                y0 + (rowH - 18 * s) * 0.5f, w - padX * 2 - bw - 16 * s, 18 * s);
-            UiIconButton(g, u, x + w - padX - bw, y0 + (rowH - bw) * 0.5f, bw, bw,
-                rows[i].icon, 16 * s, g_setHot == rows[i].act, rows[i].act,
-                u.btnRegular, u.t60);
-        }
+        const float bGap = 10 * s;
+        float bx = x + w - padX - bw;
+        UiIconButton(g, u, bx, cy + (h - bw) * 0.5f, bw, bw, UI_GITHUB, 16 * s,
+            g_setHot == ACT_GITHUB, ACT_GITHUB, u.btnRegular, u.t60);
+        bx -= bw + bGap;
+        UiIconButton(g, u, bx, cy + (h - bw) * 0.5f, bw, bw, UI_NET, 16 * s,
+            g_setHot == ACT_BLOG, ACT_BLOG, u.btnRegular, u.t60);
         cy += h + gap;
     }
 
