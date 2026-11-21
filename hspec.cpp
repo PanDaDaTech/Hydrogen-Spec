@@ -2821,13 +2821,11 @@ static void BuildModel(void)
         int total = 0;
         if (EnumAudio(au, 192, &total) > 0) {
             wchar_t title[256];
-            WPrintf(title, 256, L"声卡：%s", au);
+            if (total > 1)
+                WPrintf(title, 256, L"声卡：%s（%d 个设备）", au, total);
+            else
+                WPrintf(title, 256, L"声卡：%s", au);
             r = ModelAddRow(ICON_AUDIO, title);
-            if (total > 1) {
-                wchar_t v[48];
-                WPrintf(v, 48, L"%d 个", total);
-                ModelAddKV(r, L"设备", v);
-            }
         }
     }
 
@@ -2916,6 +2914,7 @@ static wchar_t g_dumpPath[MAX_PATH] = { 0 };
 static wchar_t g_capturePath[MAX_PATH] = { 0 };
 static bool g_captureOk = false;
 static wchar_t g_settingsDumpPath[MAX_PATH] = { 0 };
+static wchar_t g_menuDumpPath[MAX_PATH] = { 0 };
 static wchar_t g_infoDumpPath[MAX_PATH] = { 0 };
 static int g_dumpSetMode = 0;
 static int g_settingsDumpPage = 0;
@@ -3183,6 +3182,8 @@ static UINT GetDpiSafe(HWND hwnd)
 }
 
 static int g_titleH = 24, g_detailH = 21, g_rowGap = 9, g_iconSize = 24, g_gapX = 10, g_padTop = 4;
+// 分离卡片主题自己的上下留白与卡片间距：比整卡主题更紧，避免一屏放不下。
+static int g_splitPad = 10, g_splitGap = 7;
 // Card geometry (only meaningful when g_cfg.theme != THEME_PLAIN). g_cardMargin
 // leaves room for the soft shadow, the window size stays identical.
 static int g_cardMargin = 10, g_padX = 18, g_padY = 15, g_chipSize = 30;
@@ -3210,6 +3211,8 @@ static void ComputeLayout(void)
         g_padX = (int)(14.0 * s + 0.5);
         g_padY = (int)(15.0 * s + 0.5);
         g_chipSize = (int)(30.0 * s + 0.5);
+        g_splitPad = (int)(10.0 * s + 0.5);
+        g_splitGap = (int)(7.0 * s + 0.5);
         // A card spends padding on both sides, so the window widens just
         // enough to keep the text column identical to the plain theme (no
         // new truncation).
@@ -3221,8 +3224,8 @@ static void ComputeLayout(void)
             // cards are separated by rowGap inside a cardMargin frame.
             h = g_cardMargin * 2;
             for (int i = 0; i < g_rowCount; i++) {
-                h += g_padY * 2 + g_titleH + g_rows[i].detailCount * g_detailH;
-                if (i + 1 < g_rowCount) h += g_rowGap;
+                h += g_splitPad * 2 + g_titleH + g_rows[i].detailCount * g_detailH;
+                if (i + 1 < g_rowCount) h += g_splitGap;
             }
         } else {
             h = CardMode() ? (g_cardMargin * 2 + g_padY * 2) : g_padTop;
@@ -3513,15 +3516,15 @@ static void DrawGlyph(Gdiplus::Graphics& g, Gdiplus::Pen& pen, int kind,
     }
     case ICON_AUDIO: {
         Gdiplus::GraphicsPath p;
-        p.AddLine(x + 4 * u, y + 9.6f * u, x + 7.2f * u, y + 9.6f * u);
-        p.AddLine(x + 7.2f * u, y + 9.6f * u, x + 12 * u, y + 5.8f * u);
-        p.AddLine(x + 12 * u, y + 5.8f * u, x + 12 * u, y + 18.2f * u);
-        p.AddLine(x + 12 * u, y + 18.2f * u, x + 7.2f * u, y + 14.4f * u);
-        p.AddLine(x + 7.2f * u, y + 14.4f * u, x + 4 * u, y + 14.4f * u);
+        p.AddLine(x + 3.5f * u, y + 9.4f * u, x + 7 * u, y + 9.4f * u);
+        p.AddLine(x + 7 * u, y + 9.4f * u, x + 11.6f * u, y + 5.4f * u);
+        p.AddLine(x + 11.6f * u, y + 5.4f * u, x + 11.6f * u, y + 18.6f * u);
+        p.AddLine(x + 11.6f * u, y + 18.6f * u, x + 7 * u, y + 14.6f * u);
+        p.AddLine(x + 7 * u, y + 14.6f * u, x + 3.5f * u, y + 14.6f * u);
         p.CloseFigure();
         g.DrawPath(&pen, &p);
-        g.DrawArc(&pen, x + 12.4f * u, y + 7.8f * u, 5.2f * u, 8.4f * u, -55.0f, 110.0f);
-        g.DrawArc(&pen, x + 12.4f * u, y + 5.4f * u, 9.2f * u, 13.2f * u, -50.0f, 100.0f);
+        // 只留一道外弧：小尺寸下两道弧会糊成一条横线。
+        g.DrawArc(&pen, x + 12.0f * u, y + 5.6f * u, 9.6f * u, 12.8f * u, -50.0f, 100.0f);
         break;
     }
     case ICON_CLOCK: {
@@ -3888,7 +3891,7 @@ static bool RenderInternal(void)
     if (detailPx < 9) detailPx = 9;
 
     float y = card ? (float)(g_cardMargin + g_padY) : (float)g_padTop;
-    if (split) y = (float)g_cardMargin + (float)g_padY;
+    if (split) y = (float)g_cardMargin + (float)g_splitPad;
     float textX = card
         ? (float)(g_cardMargin + g_padX + g_chipSize + g_gapX)
         : (float)(g_iconSize + g_gapX);
@@ -3898,8 +3901,8 @@ static bool RenderInternal(void)
         UiRow& row = g_rows[i];
         if (split) {
             // Separated card for this section only.
-            float rowH = (float)(g_padY * 2 + g_titleH + row.detailCount * g_detailH);
-            Gdiplus::RectF rowCard((float)g_cardMargin, y - (float)g_padY,
+            float rowH = (float)(g_splitPad * 2 + g_titleH + row.detailCount * g_detailH);
+            Gdiplus::RectF rowCard((float)g_cardMargin, y - (float)g_splitPad,
                 (float)(g_winW - g_cardMargin * 2), rowH);
             float rowRadius = radius;
             if (rowRadius > rowCard.Height * 0.5f) rowRadius = rowCard.Height * 0.5f;
@@ -3921,8 +3924,22 @@ static bool RenderInternal(void)
                 chip.X + ((float)g_chipSize - glyph) * 0.5f,
                 chip.Y + ((float)g_chipSize - glyph) * 0.5f, glyph, (float)s);
         } else {
+            // 纯文字主题也画一层圆角卡片底：和卡片主题的图标同一套观感，
+            // 只是底半透明，仍然压在壁纸上。
             float iconY = y + ((float)g_titleH - (float)g_iconSize) * 0.5f;
-            DrawGlyph(g, pen, row.icon, 2.0f * (float)s, iconY, (float)g_iconSize, (float)s);
+            float cs = (float)g_chipSize;
+            Gdiplus::RectF chip(2.0f * (float)s - (cs - (float)g_iconSize) * 0.5f,
+                y + ((float)g_titleH - cs) * 0.5f, cs, cs);
+            Gdiplus::GraphicsPath cp;
+            AddRoundRect(cp, chip, cs * 0.3f);
+            Gdiplus::Color chipFill = pal.chipBg;
+            chipFill = Gdiplus::Color(200, chipFill.GetR(), chipFill.GetG(), chipFill.GetB());
+            Gdiplus::SolidBrush chipBrush(chipFill);
+            g.FillPath(&chipBrush, &cp);
+            float glyph = cs * 0.56f;
+            DrawGlyph(g, pen, row.icon,
+                chip.X + (cs - glyph) * 0.5f, chip.Y + (cs - glyph) * 0.5f,
+                glyph, (float)s);
         }
         // 纯文字主题直接贴在壁纸上：按这一行背后的壁纸亮度选深/浅字，
         // 并在字下垫一层反色影，高亮与中间调壁纸上都不会漂。
@@ -3969,8 +3986,8 @@ static bool RenderInternal(void)
             // next card's text starts 2*padY below this card's text end
             // (this card's bottom pad + the next card's top pad), plus the
             // inter-card gap.
-            y += (float)g_padY * 2.0f;
-            if (i + 1 < g_rowCount) y += (float)g_rowGap;
+            y += (float)g_splitPad * 2.0f;
+            if (i + 1 < g_rowCount) y += (float)g_splitGap;
         } else {
             y += (float)g_rowGap;
         }
@@ -6761,11 +6778,9 @@ static void DrawTrayItem(const DRAWITEMSTRUCT* d)
         (float)(d->rcItem.right - d->rcItem.left),
         (float)(d->rcItem.bottom - d->rcItem.top));
 
-    const bool dark = EffectiveDark();
-    const Gdiplus::Color bgC = dark ? Gdiplus::Color(255, 32, 33, 38)
-                                    : Gdiplus::Color(255, 255, 255, 255);
-    const Gdiplus::Color sepC = dark ? Gdiplus::Color(255, 58, 60, 68)
-                                     : Gdiplus::Color(255, 226, 228, 233);
+    const bool dark = true;   // 菜单固定深色，和 DSH 的右键菜单观感一致
+    const Gdiplus::Color bgC(255, 35, 36, 41);
+    const Gdiplus::Color sepC(255, 58, 60, 69);
 
     if (!text) {
         Gdiplus::Pen pen(sepC, 1.0f);
@@ -6797,15 +6812,96 @@ static void DrawTrayItem(const DRAWITEMSTRUCT* d)
         g.DrawLine(&pen, cx - 0.8f * s, cy + 2.4f * s, cx + 4 * s, cy - 3 * s);
     }
 
-    Gdiplus::Color tc = dim ? (dark ? Gdiplus::Color(255, 128, 129, 138)
-                                    : Gdiplus::Color(255, 150, 152, 160))
-                            : (dark ? Gdiplus::Color(255, 232, 233, 238)
-                                    : Gdiplus::Color(255, 34, 36, 42));
+    Gdiplus::Color tc = dim ? Gdiplus::Color(255, 128, 130, 139)
+                            : Gdiplus::Color(255, 233, 234, 238);
     bool darkInk = ((int)tc.GetR() + (int)tc.GetG() + (int)tc.GetB()) < 384;
-    DrawTextGdiLine(g, text, 12, FW_NORMAL, tc, darkInk,
-        (int)(rc.X + 30 * s), (int)rc.Y, (int)(rc.Width - 42 * s), (int)rc.Height,
+    DrawTextGdiLine(g, text, 13, FW_NORMAL, tc, darkInk,
+        (int)(rc.X + 32 * s), (int)rc.Y, (int)(rc.Width - 44 * s), (int)rc.Height,
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
         (double)s);
+}
+
+static bool SaveMenuPng(const wchar_t* path)
+{
+    struct E { const wchar_t* text; int id; bool dim; };
+    static const E kRows[] = {
+        { L"轻谱 · HSpec 1.0", 100, true },
+        { NULL, 0, false },
+        { L"关于轻谱", 20, false },
+        { NULL, 0, false },
+        { L"隐藏主窗口", 11, false },
+        { L"隐藏任务栏窗口", 12, false },
+        { L"隐藏托盘图标", 13, false },
+        { NULL, 0, false },
+        { L"刷新磁盘", 14, false },
+        { L"选项设置", 3, false },
+        { L"产品策略", 16, false },
+        { L"网络信息", 17, false },
+        { L"导出报告", 18, false },
+        { NULL, 0, false },
+        { L"退出程序", 2, false },
+    };
+
+    const float s = (float)(g_dpi ? g_dpi : 96) / 96.0f;
+    const int W = (int)(212.0f * s);
+    int H = (int)(8 * s);
+    for (int i = 0; i < (int)(sizeof(kRows) / sizeof(kRows[0])); i++)
+        H += (int)((kRows[i].text ? 34.0f : 10.0f) * s);
+
+    BITMAPINFO bi;
+    memset(&bi, 0, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = W;
+    bi.bmiHeader.biHeight = -H;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+
+    void* bits = NULL;
+    HDC dc = CreateCompatibleDC(NULL);
+    HBITMAP bmp = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    if (!bmp || !bits) {
+        if (bmp) DeleteObject(bmp);
+        if (dc) DeleteDC(dc);
+        return false;
+    }
+    HGDIOBJ old = SelectObject(dc, bmp);
+
+    Gdiplus::Graphics gg(dc);
+    Gdiplus::SolidBrush bgFill(Gdiplus::Color(255, 35, 36, 41));
+    gg.FillRectangle(&bgFill, Gdiplus::Rect(0, 0, W, H));
+
+    int y = (int)(4 * s);
+    for (int i = 0; i < (int)(sizeof(kRows) / sizeof(kRows[0])); i++) {
+        int h = (int)((kRows[i].text ? 34.0f : 10.0f) * s);
+        DRAWITEMSTRUCT d;
+        memset(&d, 0, sizeof(d));
+        d.CtlType = ODT_MENU;
+        d.itemID = kRows[i].id;
+        d.itemAction = ODA_DRAWENTIRE;
+        d.hDC = dc;
+        d.rcItem.left = 0;
+        d.rcItem.top = y;
+        d.rcItem.right = W;
+        d.rcItem.bottom = y + h;
+        d.itemData = (ULONG_PTR)kRows[i].text;
+        d.itemState = kRows[i].dim ? ODS_DISABLED : 0;
+        DrawTrayItem(&d);
+        y += h;
+    }
+
+    SelectObject(dc, old);
+    DeleteDC(dc);
+
+    bool ok = false;
+    {
+        Gdiplus::Bitmap out(W, H, W * 4, PixelFormat32bppPARGB, (BYTE*)bits);
+        CLSID png;
+        if (GetEncoderClsid(L"image/png", &png) >= 0)
+            ok = out.Save(path, &png, NULL) == Gdiplus::Ok;
+    }
+    DeleteObject(bmp);
+    return ok;
 }
 
 static LRESULT CALLBACK MenuOwnerProc(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -6815,8 +6911,8 @@ static LRESULT CALLBACK MenuOwnerProc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (mis && mis->CtlType == ODT_MENU) {
             const unsigned dpi = g_dpi ? g_dpi : 96;
             const float ds = (float)dpi / 96.0f;
-            mis->itemHeight = (UINT)((mis->itemData ? 30.0f : 9.0f) * ds);
-            mis->itemWidth = (UINT)(196.0f * ds);
+            mis->itemHeight = (UINT)((mis->itemData ? 34.0f : 10.0f) * ds);
+            mis->itemWidth = (UINT)(212.0f * ds);
             return TRUE;
         }
     } else if (m == WM_DRAWITEM) {
@@ -7004,8 +7100,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (m && m->CtlType == ODT_MENU) {
             const unsigned dpi = g_dpi ? g_dpi : 96;
             const float ds = (float)dpi / 96.0f;
-            m->itemHeight = (UINT)((m->itemData ? 30.0f : 9.0f) * ds);
-            m->itemWidth = (UINT)(196.0f * ds);
+            m->itemHeight = (UINT)((m->itemData ? 34.0f : 10.0f) * ds);
+            m->itemWidth = (UINT)(212.0f * ds);
             return TRUE;
         }
         break;
@@ -7216,7 +7312,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
         if (pargv) {
             for (int i = 1; i < pargc; i++) {
                 if (wcscmp(pargv[i], L"--dump") == 0 ||
-                    wcscmp(pargv[i], L"--dump-settings") == 0) {
+                    wcscmp(pargv[i], L"--dump-settings") == 0 ||
+                    wcscmp(pargv[i], L"--dump-menu") == 0) {
                     headlessDump = true;
                     break;
                 }
@@ -7241,6 +7338,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
             for (int i = 1; i < argc; i++) {
                 if (wcscmp(argv[i], L"--dump") == 0 && i + 1 < argc) {
                     wcsncpy_s(g_dumpPath, MAX_PATH, argv[++i], _TRUNCATE);
+                } else if (wcscmp(argv[i], L"--dump-menu") == 0 && i + 1 < argc) {
+                    wcsncpy_s(g_menuDumpPath, MAX_PATH, argv[++i], _TRUNCATE);
                 } else if (wcscmp(argv[i], L"--dump-settings") == 0 && i + 1 < argc) {
                     wcsncpy_s(g_settingsDumpPath, MAX_PATH, argv[++i], _TRUNCATE);
                 } else if (wcscmp(argv[i], L"--page") == 0 && i + 1 < argc) {
@@ -7300,6 +7399,10 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
     }
 
     g_dpi = GetDpiSafe(g_hwnd);
+    if (g_menuDumpPath[0]) {
+        bool ok = SaveMenuPng(g_menuDumpPath);
+        return ok ? 0 : 1;
+    }
     ComputeLayout();
     UpdateTheme();
     g_wallpaperStamp = WallpaperStamp();
