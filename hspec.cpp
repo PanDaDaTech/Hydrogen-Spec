@@ -1545,7 +1545,7 @@ struct Config
 };
 
 static Config g_cfg = {
-    THEME_PLAIN, 1, 250, 88, 16,   // theme / hueFollow / hue / opacity / radius
+    THEME_PLAIN, 1, 250, 80, 4,    // theme / hueFollow / hue / opacity / radius
     1, 1, 1, 1, 1, 1, 1,           // cpu board mem disk gpu npu net
     1, 1, 1, 1,                    // monitor battery audio ports
     0, 0, 0,                       // lightMode / posDx / posDy
