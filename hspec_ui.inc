@@ -1599,11 +1599,11 @@ static void PageWindowUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     float x, float y, float w, float s)
 {
-    // 结构照 Hydrogen-Keyboard 的关于页：产品卡 + 入口卡 + 许可/信息卡 + 版权行。
+    // 结构照 Hydrogen-Keyboard 的关于页：产品卡 + 项目地址 + 开源许可 + 版权行。
     const float padX = 20 * s;
     const float padY = 14 * s;
-    const float gap = 8 * s;
-    float cy = y + 6 * s;
+    const float gap = 10 * s;
+    float cy = y + 8 * s;
 
     // ---- 产品卡 ----
     {
@@ -1621,56 +1621,51 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         float tx = mark.GetRight() + 14 * s;
         float tw = x + w - padX - tx;
         SText(g, L"轻谱 Hydrogen Spec", 16.5f, FW_NORMAL, u.deepText, light, tx,
-            cy + padY + 7 * s, tw, 24 * s);
+            cy + padY + 8 * s, tw, 24 * s);
         SText(g, L"把机器的全部参数摊在桌面上 · v1.0 · x64", 11.5f, FW_NORMAL, u.t40,
-            light, tx, cy + padY + 32 * s, tw, 18 * s);
+            light, tx, cy + padY + 33 * s, tw, 18 * s);
         cy += h + gap;
     }
 
-    // ---- 项目地址：右侧两个圆形入口 ----
+    // ---- 项目地址：两行链接，右侧各一个跳转按钮 ----
     {
-        float h = 56 * s + padY * 2;
+        const float rowH = 46 * s;
+        float h = padY * 2 + 24 * s + rowH * 2;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"项目地址", 13.5f, FW_NORMAL, u.deepText, light, x + padX,
-            cy + padY + 3 * s, 320 * s, 20 * s);
-        SText(g, L"源码、版本发布与使用说明", 11.5f, FW_NORMAL, u.t40, light,
-            x + padX, cy + padY + 24 * s, 420 * s, 16 * s);
-        float bw = 34 * s;
-        float by = cy + (h - bw) * 0.5f;
-        float bx = x + w - padX - bw;
-        UiIconButton(g, u, bx, by, bw, bw, UI_CODE, 17 * s,
-            g_setHot == ACT_GITHUB, ACT_GITHUB, u.btnRegular, u.t60);
-        UiIconButton(g, u, bx - bw - 8 * s, by, bw, bw, UI_COPY, 17 * s,
-            g_setHot == ACT_COPYVER, ACT_COPYVER, u.btnRegular, u.t60);
+            cy + padY, 160 * s, 18 * s);
+
+        float ry = cy + padY + 24 * s;
+        const float bw = 32 * s;
+        struct LinkRow { const wchar_t* title; const wchar_t* sub; UiIcon icon; int act; };
+        const LinkRow rows[2] = {
+            { L"仓库地址", L"github.com/PanDaDaTech/Hydrogen-Spec", UI_CODE, ACT_GITHUB },
+            { L"博客地址", L"pandadatech.cn", UI_NET, ACT_BLOG },
+        };
+        for (int i = 0; i < 2; i++) {
+            float y0 = ry + i * rowH;
+            SText(g, rows[i].title, 12.5f, FW_NORMAL, u.t75, light, x + padX, y0 + 2 * s,
+                200 * s, 18 * s);
+            SText(g, rows[i].sub, 11, FW_NORMAL, u.t40, light, x + padX, y0 + 21 * s,
+                420 * s, 16 * s);
+            UiIconButton(g, u, x + w - padX - bw, y0 + (rowH - bw) * 0.5f, bw, bw,
+                rows[i].icon, 16 * s, g_setHot == rows[i].act, rows[i].act,
+                u.btnRegular, u.t60);
+        }
         cy += h + gap;
     }
 
-    // ---- 许可与运行信息 ----
+    // ---- 开源许可 ----
     {
-        const float rowH = 36 * s;
-        float h = padY * 2 + rowH * 3;
+        float h = padY * 2 + 36 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
-        float ry = cy + padY;
-        float kx = x + padX + 96 * s;
-
-        SText(g, L"开源许可", 12.5f, FW_NORMAL, u.t50, light, x + padX, ry + 8 * s,
-            96 * s, 20 * s);
-        SText(g, L"MIT", 12.5f, FW_NORMAL, u.t90, light, kx, ry + 8 * s, 200 * s, 20 * s);
-        UiButton(g, u, light, x + w - padX - 62 * s, ry + 3 * s, 62 * s, 30 * s,
+        SText(g, L"开源许可", 12.5f, FW_NORMAL, u.t50, light, x + padX, cy + padY + 8 * s,
+            96 * s, 18 * s);
+        SText(g, L"MIT", 12.5f, FW_NORMAL, u.t90, light, x + padX + 96 * s,
+            cy + padY + 8 * s, 200 * s, 18 * s);
+        UiButton(g, u, light, x + w - padX - 62 * s, cy + padY + 1 * s, 62 * s, 30 * s,
             L"查看", -1, false, g_setHot == ACT_LICENSE, ACT_LICENSE);
-        ry += rowH;
-
-        SText(g, L"界面字体", 12.5f, FW_NORMAL, u.t50, light, x + padX, ry + 8 * s,
-            96 * s, 20 * s);
-        SText(g, L"MiSans Medium 子集 · 内嵌", 12.5f, FW_NORMAL, u.t90, light, kx,
-            ry + 8 * s, w - (kx - x) - padX, 20 * s);
-        ry += rowH;
-
-        SText(g, L"运行方式", 12.5f, FW_NORMAL, u.t50, light, x + padX, ry + 8 * s,
-            96 * s, 20 * s);
-        SText(g, L"单文件 · 静默 · 不联网", 12.5f, FW_NORMAL, u.t90, light, kx,
-            ry + 8 * s, w - (kx - x) - padX, 20 * s);
-        cy += h + 14 * s;
+        cy += h + 16 * s;
     }
 
     SText(g, L"Copyright 2019-2026 PanDaTech. All Rights Reserved.", 11, FW_NORMAL,
@@ -2286,8 +2281,12 @@ static bool UiHandleAction(int act)
         return true;
     }
     if (act == ACT_GITHUB) {
-        ShellExecuteW(NULL, L"open", L"https://github.com/PanDaTech/Hydrogen-Spec",
+        ShellExecuteW(NULL, L"open", L"https://github.com/PanDaDaTech/Hydrogen-Spec",
             NULL, NULL, SW_SHOWNORMAL);
+        return true;
+    }
+    if (act == ACT_BLOG) {
+        ShellExecuteW(NULL, L"open", L"https://pandadatech.cn", NULL, NULL, SW_SHOWNORMAL);
         return true;
     }
     if (act == ACT_COPYVER) {

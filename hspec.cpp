@@ -4310,6 +4310,7 @@ enum
     ACT_GITHUB = 50,
     ACT_COPYVER = 51,
     ACT_LICENSE = 137,
+    ACT_BLOG = 138,
     ACT_POS = 60,        // + 0 up / 1 down / 2 left / 3 right / 4 reset
     ACT_SAVEINFO = 70,   // 保存所有信息
     ACT_OPENFOLDER = 71, // 打开保存目录
