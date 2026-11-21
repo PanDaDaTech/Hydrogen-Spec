@@ -98,7 +98,7 @@ enum UiIcon
     UI_MONITOR, UI_BATTERY, UI_AUDIO, UI_PLUG, UI_REFRESH, UI_COPY, UI_DOC,
     UI_GEAR, UI_BACK, UI_RING, UI_WINDOW, UI_EYE_OFF, UI_MIN, UI_CLOSE,
     UI_CHEVRON, UI_CARET, UI_UP, UI_DOWN, UI_LEFT, UI_RIGHT, UI_CHECK,
-    UI_IMAGE, UI_CODE, UI_INFO, UI_CLOCK, UI_EXPORT,
+    UI_IMAGE, UI_CODE, UI_INFO, UI_CLOCK, UI_EXPORT, UI_GITHUB,
     UI_TAB_HW, UI_TAB_SYS, UI_TAB_LOOK, UI_TAB_CONTENT, UI_TAB_WINDOW, UI_TAB_ABOUT,
     UI_COUNT_
 };
@@ -346,6 +346,62 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
         Ell(12, 12, 6.6f);
         { Gdiplus::SolidBrush b(col); g.FillEllipse(&b, X(10.2f), Y(2.4f), 3.6f * k, 3.6f * k); }
         break;
+    case UI_GITHUB: {
+        // 与 Hydrogen-Keyboard / PanDaPE-Maker 同一份几何：24 网格填充路径。
+        Gdiplus::Color gc;
+        pen.GetColor(&gc);
+        Gdiplus::SolidBrush gb(gc);
+        Gdiplus::GraphicsPath gp;
+        gp.StartFigure();
+        gp.AddBezier(Gdiplus::PointF(X(12.0f), Y(2.6f)), Gdiplus::PointF(X(7.387f), Y(2.598f)),
+            Gdiplus::PointF(X(3.455f), Y(5.943f)), Gdiplus::PointF(X(2.717f), Y(10.496f)));
+        gp.AddBezier(Gdiplus::PointF(X(2.717f), Y(10.496f)), Gdiplus::PointF(X(1.978f), Y(15.049f)),
+            Gdiplus::PointF(X(4.653f), Y(19.465f)), Gdiplus::PointF(X(9.03f), Y(20.92f)));
+        gp.AddLine(Gdiplus::PointF(X(9.03f), Y(20.92f)), Gdiplus::PointF(X(9.67f), Y(20.92f)));
+        gp.AddLine(Gdiplus::PointF(X(9.67f), Y(20.92f)), Gdiplus::PointF(X(9.67f), Y(18.9f)));
+        gp.AddBezier(Gdiplus::PointF(X(9.67f), Y(18.9f)), Gdiplus::PointF(X(7.07f), Y(19.46f)),
+            Gdiplus::PointF(X(6.52f), Y(17.65f)), Gdiplus::PointF(X(6.52f), Y(17.65f)));
+        gp.AddBezier(Gdiplus::PointF(X(6.52f), Y(17.65f)), Gdiplus::PointF(X(6.09f), Y(16.57f)),
+            Gdiplus::PointF(X(5.48f), Y(16.28f)), Gdiplus::PointF(X(5.48f), Y(16.28f)));
+        gp.AddBezier(Gdiplus::PointF(X(5.48f), Y(16.28f)), Gdiplus::PointF(X(4.63f), Y(15.7f)),
+            Gdiplus::PointF(X(5.55f), Y(15.71f)), Gdiplus::PointF(X(5.55f), Y(15.71f)));
+        gp.AddBezier(Gdiplus::PointF(X(5.55f), Y(15.71f)), Gdiplus::PointF(X(6.49f), Y(15.78f)),
+            Gdiplus::PointF(X(6.99f), Y(16.68f)), Gdiplus::PointF(X(6.99f), Y(16.68f)));
+        gp.AddBezier(Gdiplus::PointF(X(6.99f), Y(16.68f)), Gdiplus::PointF(X(7.83f), Y(18.12f)),
+            Gdiplus::PointF(X(9.19f), Y(17.7f)), Gdiplus::PointF(X(9.72f), Y(17.46f)));
+        gp.AddBezier(Gdiplus::PointF(X(9.72f), Y(17.46f)), Gdiplus::PointF(X(9.8f), Y(16.85f)),
+            Gdiplus::PointF(X(10.05f), Y(16.44f)), Gdiplus::PointF(X(10.32f), Y(16.2f)));
+        gp.AddBezier(Gdiplus::PointF(X(10.32f), Y(16.2f)), Gdiplus::PointF(X(8.25f), Y(15.97f)),
+            Gdiplus::PointF(X(6.07f), Y(15.16f)), Gdiplus::PointF(X(6.07f), Y(11.59f)));
+        gp.AddBezier(Gdiplus::PointF(X(6.07f), Y(11.59f)), Gdiplus::PointF(X(6.07f), Y(10.57f)),
+            Gdiplus::PointF(X(6.43f), Y(9.73f)), Gdiplus::PointF(X(7.04f), Y(9.08f)));
+        gp.AddBezier(Gdiplus::PointF(X(7.04f), Y(9.08f)), Gdiplus::PointF(X(6.94f), Y(8.84f)),
+            Gdiplus::PointF(X(6.62f), Y(7.89f)), Gdiplus::PointF(X(7.13f), Y(6.6f)));
+        gp.AddBezier(Gdiplus::PointF(X(7.13f), Y(6.6f)), Gdiplus::PointF(X(7.91f), Y(6.35f)),
+            Gdiplus::PointF(X(9.69f), Y(7.55f)), Gdiplus::PointF(X(9.69f), Y(7.55f)));
+        gp.AddBezier(Gdiplus::PointF(X(9.69f), Y(7.55f)), Gdiplus::PointF(X(11.216f), Y(7.136f)),
+            Gdiplus::PointF(X(12.824f), Y(7.136f)), Gdiplus::PointF(X(14.35f), Y(7.55f)));
+        gp.AddBezier(Gdiplus::PointF(X(14.35f), Y(7.55f)), Gdiplus::PointF(X(16.13f), Y(6.35f)),
+            Gdiplus::PointF(X(16.9f), Y(6.6f)), Gdiplus::PointF(X(16.9f), Y(6.6f)));
+        gp.AddBezier(Gdiplus::PointF(X(16.9f), Y(6.6f)), Gdiplus::PointF(X(17.41f), Y(7.89f)),
+            Gdiplus::PointF(X(17.09f), Y(8.84f)), Gdiplus::PointF(X(17.0f), Y(9.08f)));
+        gp.AddBezier(Gdiplus::PointF(X(17.0f), Y(9.08f)), Gdiplus::PointF(X(17.6f), Y(9.73f)),
+            Gdiplus::PointF(X(17.96f), Y(10.57f)), Gdiplus::PointF(X(17.96f), Y(11.59f)));
+        gp.AddBezier(Gdiplus::PointF(X(17.96f), Y(11.59f)), Gdiplus::PointF(X(17.96f), Y(15.17f)),
+            Gdiplus::PointF(X(15.78f), Y(15.96f)), Gdiplus::PointF(X(13.7f), Y(16.19f)));
+        gp.AddBezier(Gdiplus::PointF(X(13.7f), Y(16.19f)), Gdiplus::PointF(X(14.04f), Y(16.48f)),
+            Gdiplus::PointF(X(14.34f), Y(17.05f)), Gdiplus::PointF(X(14.34f), Y(17.93f)));
+        gp.AddLine(Gdiplus::PointF(X(14.34f), Y(17.93f)), Gdiplus::PointF(X(14.34f), Y(20.51f)));
+        gp.AddBezier(Gdiplus::PointF(X(14.34f), Y(20.51f)), Gdiplus::PointF(X(14.34f), Y(20.76f)),
+            Gdiplus::PointF(X(14.5f), Y(21.06f)), Gdiplus::PointF(X(14.99f), Y(20.96f)));
+        gp.AddBezier(Gdiplus::PointF(X(14.99f), Y(20.96f)), Gdiplus::PointF(X(19.438f), Y(19.551f)),
+            Gdiplus::PointF(X(22.179f), Y(15.093f)), Gdiplus::PointF(X(21.429f), Y(10.488f)));
+        gp.AddBezier(Gdiplus::PointF(X(21.429f), Y(10.488f)), Gdiplus::PointF(X(20.679f), Y(5.883f)),
+            Gdiplus::PointF(X(16.665f), Y(2.525f)), Gdiplus::PointF(X(12.0f), Y(2.6f)));
+        gp.CloseFigure();
+        g.FillPath(&gb, &gp);
+        break;
+    }
     case UI_WINDOW:
         Rect(3, 4, 18, 16, 2.6f);
         Line(3, 9, 21, 9);
@@ -1639,15 +1695,20 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         const float bw = 32 * s;
         struct LinkRow { const wchar_t* title; const wchar_t* sub; UiIcon icon; int act; };
         const LinkRow rows[2] = {
-            { L"仓库地址", L"github.com/PanDaDaTech/Hydrogen-Spec", UI_CODE, ACT_GITHUB },
+            { L"仓库地址", L"github.com/PanDaDaTech/Hydrogen-Spec", UI_GITHUB, ACT_GITHUB },
             { L"博客地址", L"pandadatech.cn", UI_NET, ACT_BLOG },
         };
         for (int i = 0; i < 2; i++) {
             float y0 = ry + i * rowH;
             SText(g, rows[i].title, 12.5f, FW_NORMAL, u.t75, light, x + padX, y0 + 2 * s,
                 200 * s, 18 * s);
-            SText(g, rows[i].sub, 11, FW_NORMAL, u.t40, light, x + padX, y0 + 21 * s,
+            SText(g, rows[i].sub, 11, FW_NORMAL, u.primary, light, x + padX, y0 + 21 * s,
                 420 * s, 16 * s);
+            {
+                // 链接文字本身也可点：命中区跟着文字宽度走。
+                float lw = UiTextW(rows[i].sub, 11) + 4 * s;
+                UiHitScreen(x + padX, y0 + 19 * s, lw, 20 * s, rows[i].act);
+            }
             UiIconButton(g, u, x + w - padX - bw, y0 + (rowH - bw) * 0.5f, bw, bw,
                 rows[i].icon, 16 * s, g_setHot == rows[i].act, rows[i].act,
                 u.btnRegular, u.t60);
