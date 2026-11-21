@@ -1609,12 +1609,11 @@ static void PageWindowUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     // ---- 窗口 ----
     {
-        float h = 40 * s + 4 * 58 * s + 8 * s;
+        // 页头已经写了「窗口」，卡内不再重复标题。
+        float h = 8 * s + 4 * 58 * s + 8 * s;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
-        SText(g, L"窗口", 14.5f, FW_NORMAL, u.deepText, light, x + 22 * s, cy + 12 * s,
-            200 * s, 20 * s);
 
-        float ry = cy + 40 * s;
+        float ry = cy + 8 * s;
         UiSwitchRow(g, u, light, x, ry, w, L"隐藏任务栏窗口",
             L"主窗口不进入任务栏，只从托盘或悬浮按钮唤回", g_cfg.hideTaskbar != 0,
             false, ACT_HIDE_TASKBAR, s, false);
@@ -1831,13 +1830,15 @@ static void UiRail(Gdiplus::Graphics& g, const UiStyle& u, bool light, float h, 
 }
 
 static void UiPageHead(Gdiplus::Graphics& g, const UiStyle& u, bool light,
-    float x, float y, float w, const wchar_t* title, const wchar_t* sub, float s)
+    float x, float y, float w, UiIcon icon, const wchar_t* title, float s)
 {
-    FillRound(g, MRect(x, y + 3 * s, 4 * s, 40 * s), 2 * s, u.primary);
-    SText(g, title, 20, FW_NORMAL, u.deepText, light, x + 16 * s, y - 2 * s,
-        w - 220 * s, 28 * s);
-    SText(g, sub, 12.5f, FW_NORMAL, u.t50, light, x + 16 * s, y + 26 * s,
-        w - 220 * s, 18 * s);
+    // 页头只有图标 + 标题，不再有竖条和描述。
+    const float chip = 34 * s;
+    Gdiplus::RectF box(x, y + 2 * s, chip, chip);
+    FillRound(g, box, 10 * s, u.btnRegular);
+    DrawUiIcon(g, icon, UiCX(box), UiCY(box), 21 * s, u.deepText);
+    SText(g, title, 20, FW_NORMAL, u.deepText, light, x + chip + 12 * s, y + 4 * s,
+        w - 260 * s, 30 * s);
 }
 
 static void UiDrawExportMenu(Gdiplus::Graphics& g, const UiStyle& u, bool light,
@@ -2000,16 +2001,16 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     g.TranslateTransform(0, -(float)g_uiScroll);
 
     const wchar_t* title = L"";
-    const wchar_t* sub = L"";
+    UiIcon pageIcon = UI_INFO;
     if (g_setMode == 0) {
-        if (g_mainTab == 0) { title = L"硬件信息"; sub = L"汇总本机型号、系统和关键硬件参数"; }
-        else { title = L"目标系统信息"; sub = L"查看并保存本机磁盘上每个系统的资料"; }
-    } else if (g_setPage == 0) { title = L"外观"; sub = L"配色、明暗与圆角，改完立即生效"; }
-        else if (g_setPage == 1) { title = L"显示内容"; sub = L"设置面板上你想要显示的内容"; }
-    else if (g_setPage == 2) { title = L"窗口"; sub = L"主窗口的入口与桌面层行为"; }
-    else { title = L""; sub = L""; }
+        if (g_mainTab == 0) { title = L"硬件信息"; pageIcon = UI_TAB_HW; }
+        else { title = L"目标系统信息"; pageIcon = UI_TAB_SYS; }
+    } else if (g_setPage == 0) { title = L"外观"; pageIcon = UI_TAB_LOOK; }
+        else if (g_setPage == 1) { title = L"显示内容"; pageIcon = UI_TAB_CONTENT; }
+    else if (g_setPage == 2) { title = L"窗口"; pageIcon = UI_TAB_WINDOW; }
+    else { title = L""; }
 
-    if (title[0]) UiPageHead(g, u, light, x, y, w, title, sub, s);
+    if (title[0]) UiPageHead(g, u, light, x, y, w, pageIcon, title, s);
 
     // 页头右侧动作
     if (g_setMode == 0 && g_mainTab == 0) {
@@ -2029,7 +2030,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
             UI_REFRESH, false, g_setHot == ACT_REDETECT, ACT_REDETECT);
     }
 
-    float contentY = y + 52 * s;
+    float contentY = y + 46 * s;
     if (g_setMode == 0) {
         if (g_mainTab == 0) PageHwUi(g, u, light, x, contentY, w, s);
         else PageSysUi(g, u, light, x, contentY, w, s);
