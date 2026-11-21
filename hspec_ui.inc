@@ -2008,7 +2008,7 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     } else if (g_setPage == 0) { title = L"外观"; pageIcon = UI_TAB_LOOK; }
         else if (g_setPage == 1) { title = L"显示内容"; pageIcon = UI_TAB_CONTENT; }
     else if (g_setPage == 2) { title = L"窗口"; pageIcon = UI_TAB_WINDOW; }
-    else { title = L""; }
+    else { title = L"关于"; pageIcon = UI_TAB_ABOUT; }
 
     if (title[0]) UiPageHead(g, u, light, x, y, w, pageIcon, title, s);
 
