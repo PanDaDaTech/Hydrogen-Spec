@@ -266,6 +266,9 @@ struct SmbiosInfo
         int speed;
         int type;
     } mem[16];
+
+    // SMBIOS Type 22：便携电池，DesignCapacity 是设计容量（mWh）
+    int batteryDesignMwh;
 };
 
 static void SmbiosGetStr(const BYTE* strtab, const BYTE* strend, BYTE index, wchar_t* out, int cap)
@@ -360,6 +363,10 @@ static void ParseSmbiosTable(const BYTE* table, const BYTE* end, SmbiosInfo* si)
                 if (len > 0x1A) SmbiosGetStr(strtab, strend, p[0x1A], m.part, 96);
                 si->memCount++;
             }
+        } else if (type == 22 && len >= 0x0C) {
+            // 设计容量（mWh）。有些机器的电池驱动不报 DesignedCapacity，用这里兜底。
+            WORD cap = *(WORD*)(p + 0x0A);
+            if (cap > 0 && cap != 0xFFFF) si->batteryDesignMwh = (int)cap;
         }
 
         p = (q + 1 < end) ? q + 2 : end;
@@ -463,6 +470,36 @@ static void GetCpuBrand(wchar_t* out, int cap)
         }
     }
 #endif
+}
+
+static void GetCpuCacheText(wchar_t* out, int cap)
+{
+    out[0] = 0;
+    DWORD len = 0;
+    GetLogicalProcessorInformationEx(RelationCache, NULL, &len);
+    if (len == 0) return;
+    BYTE* buf = (BYTE*)malloc(len);
+    if (!buf) return;
+    ULONGLONG l2 = 0, l3 = 0;
+    if (GetLogicalProcessorInformationEx(RelationCache,
+            (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)buf, &len)) {
+        for (BYTE* p = buf; p < buf + len; ) {
+            PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX e =
+                (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)p;
+            if (e->Relationship == RelationCache) {
+                // L2 每个核心报一条，累加；L3 每组报一条，取最大。
+                if (e->Cache.Level == 2) l2 += e->Cache.CacheSize;
+                else if (e->Cache.Level == 3 && e->Cache.CacheSize > l3)
+                    l3 = e->Cache.CacheSize;
+            }
+            if (e->Size == 0) break;
+            p += e->Size;
+        }
+    }
+    free(buf);
+    ULONGLONG v = l3 ? l3 : l2;
+    if (v)
+        WPrintf(out, cap, L"%llu MB", (unsigned long long)(v / (1024 * 1024)));
 }
 
 static int GetPhysicalCores(void)
@@ -1774,6 +1811,9 @@ struct UiRow
     wchar_t title[256];
     wchar_t details[12][320];
     int detailCount;
+    // 只在设置页补充的信息（桌面面板不画），格式同 details 的 "标签\x1f值"。
+    wchar_t extra[6][320];
+    int extraCount;
 };
 
 static UiRow g_rows[24];
@@ -1825,6 +1865,16 @@ static void ModelAddKV(UiRow* r, const wchar_t* label, const wchar_t* value)
         }
     }
     wcsncpy_s(r->details[r->detailCount++], 320, item, _TRUNCATE);
+}
+
+// 只补在设置页的说明行（桌面面板保持原样）。
+static void ModelAddExtra(UiRow* r, const wchar_t* label, const wchar_t* value)
+{
+    if (!r || r->extraCount >= 6) return;
+    if (label && label[0])
+        WPrintf(r->extra[r->extraCount++], 320, L"%s\x1f%s", label, value ? value : L"");
+    else
+        wcsncpy_s(r->extra[r->extraCount++], 320, value ? value : L"", _TRUNCATE);
 }
 
 // 面板/导出用：把 "标签\x1f值" 变成 "标签：值"（中文界面用全角冒号，值不再留空格）
@@ -1970,6 +2020,30 @@ static void CollectTargetInfo(TargetInfo* t)
     RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"BuildLabEx", t->lab, 160);
     RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"RegisteredOwner", t->regUser, 128);
     RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"RegisteredOrganization", t->regOrg, 128);
+
+    // 微软一直没有把 Win11 的 ProductName 改掉，注册表里仍写着 "Windows 10"。
+    // 规则：大版本号 >= 21996 就是 Windows 11；服务器版不做判断，按注册表原样来。
+    {
+        const int buildNo = _wtoi(t->build);
+        bool server = (wcsstr(t->osName, L"Server") != NULL);
+        if (!server) {
+            wchar_t installType[32] = { 0 };
+            RegReadStr(HKEY_LOCAL_MACHINE, kCv, L"InstallationType", installType, 32);
+            if (wcsstr(installType, L"Server"))
+                server = true;
+        }
+        if (!server && buildNo >= 21996) {
+            const wchar_t* p = wcsstr(t->osName, L"Windows 10");
+            if (p) {
+                wchar_t fixedName[192] = { 0 };
+                int prefix = (int)(p - t->osName);
+                wcsncpy_s(fixedName, 192, t->osName, prefix);
+                wcscat_s(fixedName, 192, L"Windows 11");
+                wcscat_s(fixedName, 192, p + 10);
+                wcsncpy_s(t->osName, 192, fixedName, _TRUNCATE);
+            }
+        }
+    }
 
     DWORD ubr = RegReadDword(HKEY_LOCAL_MACHINE, kCv, L"UBR");
     if (ubr)
@@ -2135,6 +2209,78 @@ static int HealthPercent(int designed, int full)
     if (designed <= 0 || full <= 0) return -1;
     int p = (int)((double)full * 100.0 / (double)designed + 0.5);
     return ClampInt(p, 0, 150);
+}
+
+// 部分机器的电池驱动不报 DesignedCapacity / FullChargedCapacity
+// （联想这类机器很常见），用系统自带的 powercfg 电池报告兜底。
+// 报告要起进程，结果缓存 10 分钟，别让 60 秒的刷新一直拉它。
+static int XmlIntAfter(const char* xml, const char* tag)
+{
+    const char* p = strstr(xml, tag);
+    if (!p) return 0;
+    p += strlen(tag);
+    while (*p && (*p < '0' || *p > '9')) p++;
+    return atoi(p);
+}
+
+static void BatteryReportCapacity(int* design, int* full)
+{
+    static ULONGLONG stamp = 0;
+    static int cachedDesign = 0, cachedFull = 0;
+    *design = 0;
+    *full = 0;
+
+    ULONGLONG now = GetTickCount64();
+    if (stamp != 0 && now - stamp < 600000) {
+        *design = cachedDesign;
+        *full = cachedFull;
+        return;
+    }
+
+    wchar_t dir[MAX_PATH] = { 0 };
+    wchar_t path[MAX_PATH] = { 0 };
+    GetTempPathW(MAX_PATH, dir);
+    WPrintf(path, MAX_PATH, L"%shspec-battery.xml", dir);
+    DeleteFileW(path);
+
+    wchar_t cmd[512] = { 0 };
+    WPrintf(cmd, 512, L"powercfg /batteryreport /xml /output \"%s\"", path);
+    STARTUPINFOW si;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+    si.dwFlags = STARTF_USESHOWWINDOW;
+    si.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION pi;
+    memset(&pi, 0, sizeof(pi));
+    if (CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL,
+            &si, &pi)) {
+        WaitForSingleObject(pi.hProcess, 6000);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
+    }
+
+    HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+        FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD size = GetFileSize(h, NULL);
+        if (size > 0 && size < 4 * 1024 * 1024) {
+            char* buf = (char*)malloc(size + 1);
+            if (buf) {
+                DWORD got = 0;
+                if (ReadFile(h, buf, size, &got, NULL)) {
+                    buf[got] = 0;
+                    cachedDesign = XmlIntAfter(buf, "DesignCapacity");
+                    cachedFull = XmlIntAfter(buf, "FullChargeCapacity");
+                }
+                free(buf);
+            }
+        }
+        CloseHandle(h);
+    }
+    DeleteFileW(path);
+    stamp = now;
+    *design = cachedDesign;
+    *full = cachedFull;
 }
 
 static bool ReadBattery(BatteryInfo* out)
@@ -2365,6 +2511,23 @@ static void BuildModel(void)
             WPrintf(d, 32, L"%d", threads);
             ModelAddKV(r, L"线程", d);
         }
+    }
+    // 设置页补两列，把一行铺满（桌面面板不加）。
+    {
+        DWORD mhz = RegReadDword(HKEY_LOCAL_MACHINE,
+            L"HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0", L"~MHz");
+        if (mhz > 0) {
+            wchar_t d[32];
+            if (mhz >= 1000)
+                WPrintf(d, 32, L"%.2f GHz", mhz / 1000.0);
+            else
+                WPrintf(d, 32, L"%lu MHz", (unsigned long)mhz);
+            ModelAddExtra(r, L"基准", d);
+        }
+        wchar_t cache[32] = { 0 };
+        GetCpuCacheText(cache, 32);
+        if (cache[0])
+            ModelAddExtra(r, L"缓存", cache);
     }
 
     // ---- Board / firmware ----
@@ -2609,17 +2772,27 @@ static void BuildModel(void)
             // 对用户没有意义，标题固定写「电池」，容量信息走明细。
             r = ModelAddRow(ICON_BATTERY, L"电池");
 
-            if (bat.designed > 0) {
+            int designed = bat.designed;
+            int fullCap = bat.full;
+            if (designed <= 0 || fullCap <= 0) {
+                int rbDesign = 0, rbFull = 0;
+                BatteryReportCapacity(&rbDesign, &rbFull);
+                if (designed <= 0) designed = rbDesign;
+                if (fullCap <= 0) fullCap = rbFull;
+            }
+            if (designed <= 0 && g_smbios.batteryDesignMwh > 0)
+                designed = g_smbios.batteryDesignMwh;   // SMBIOS Type 22 兜底
+            if (designed > 0) {
                 wchar_t v[32];
-                WPrintf(v, 32, L"%.1f Wh", (double)bat.designed / 1000.0);
+                WPrintf(v, 32, L"%.1f Wh", (double)designed / 1000.0);
                 ModelAddKV(r, L"设计容量", v);
             }
-            if (bat.full > 0) {
+            if (fullCap > 0) {
                 wchar_t v[32];
-                WPrintf(v, 32, L"%.1f Wh", (double)bat.full / 1000.0);
+                WPrintf(v, 32, L"%.1f Wh", (double)fullCap / 1000.0);
                 ModelAddKV(r, L"满充容量", v);
             }
-            int hp = HealthPercent(bat.designed, bat.full);
+            int hp = HealthPercent(designed, fullCap);
             if (hp > 0) {
                 wchar_t v[32];
                 WPrintf(v, 32, L"%d%%", hp);

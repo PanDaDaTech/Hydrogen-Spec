@@ -212,15 +212,15 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
     case UI_AUDIO: {
         Gdiplus::GraphicsPath p;
         p.StartFigure();
-        p.AddLine(Gdiplus::PointF(X(4), Y(9.6f)), Gdiplus::PointF(X(7.2f), Y(9.6f)));
-        p.AddLine(Gdiplus::PointF(X(7.2f), Y(9.6f)), Gdiplus::PointF(X(12), Y(5.8f)));
-        p.AddLine(Gdiplus::PointF(X(12), Y(5.8f)), Gdiplus::PointF(X(12), Y(18.2f)));
-        p.AddLine(Gdiplus::PointF(X(12), Y(18.2f)), Gdiplus::PointF(X(7.2f), Y(14.4f)));
-        p.AddLine(Gdiplus::PointF(X(7.2f), Y(14.4f)), Gdiplus::PointF(X(4), Y(14.4f)));
+        p.AddLine(Gdiplus::PointF(X(4), Y(9.8f)), Gdiplus::PointF(X(6.8f), Y(9.8f)));
+        p.AddLine(Gdiplus::PointF(X(6.8f), Y(9.8f)), Gdiplus::PointF(X(10.6f), Y(6.2f)));
+        p.AddLine(Gdiplus::PointF(X(10.6f), Y(6.2f)), Gdiplus::PointF(X(10.6f), Y(17.8f)));
+        p.AddLine(Gdiplus::PointF(X(10.6f), Y(17.8f)), Gdiplus::PointF(X(6.8f), Y(14.2f)));
+        p.AddLine(Gdiplus::PointF(X(6.8f), Y(14.2f)), Gdiplus::PointF(X(4), Y(14.2f)));
         p.CloseFigure();
         g.DrawPath(&pen, &p);
-        g.DrawArc(&pen, X(13.6f), Y(8.2f), 4.4f * k, 4.4f * k, -55, 110);
-        g.DrawArc(&pen, X(15.6f), Y(5.6f), 8.6f * k, 8.6f * k, -50, 100);
+        g.DrawArc(&pen, X(12.0f), Y(9.0f), 3.4f * k, 3.4f * k, -55, 110);
+        g.DrawArc(&pen, X(13.4f), Y(7.2f), 5.8f * k, 5.8f * k, -50, 100);
         break;
     }
     case UI_PLUG:
@@ -538,8 +538,10 @@ static int UiKvLines(const UiRow& row, float rowW, float s, float keyW,
     int wide = 0;
     float used = 0;
     KvPair parts[12];
-    for (int d = 0; d < row.detailCount; d++) {
-        int n = SplitDetail(row.details[d], parts, 12);
+    for (int d = 0; d < row.detailCount + row.extraCount; d++) {
+        const wchar_t* text = (d < row.detailCount) ? row.details[d]
+                                                    : row.extra[d - row.detailCount];
+        int n = SplitDetail(text, parts, 12);
         for (int i = 0; i < n; i++) {
             float pw = UiKvWidth(parts[i], s, keyW);
             if (parts[i].label[0] == 0) {
@@ -661,35 +663,68 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     float lineW = w - 44 * s;
     float x0 = x + 44 * s;
     float step = kUiLineH * s + 2 * s;
-    int line = 0;
-    float used = 0;
 
     KvPair parts[12];
-    for (int d = 0; d < row.detailCount; d++) {
-        int n = SplitDetail(row.details[d], parts, 12);
-        for (int i = 0; i < n; i++) {
-            float pw = UiKvWidth(parts[i], s, keyW);
-            bool wide = (parts[i].label[0] == 0);
-            if (wide) {
-                if (used > 0) { line++; used = 0; }
-                SText(g, parts[i].value, 12, FW_NORMAL, u.t75, light, x0, ry + line * step,
-                    lineW, kUiLineH * s);
-                line++;
-                continue;
-            }
-            if (used > 0 && used + kUiCellGap * s + pw > lineW) { line++; used = 0; }
-            float cx = x0 + used;
-            SText(g, parts[i].label, 12, FW_NORMAL, u.t50, light, cx, ry + line * step,
+    struct DrawItem { KvPair p; bool wide; };
+    DrawItem items[64];
+    int n = 0;
+    for (int d = 0; d < row.detailCount && n < 63; d++) {
+        int cnt = SplitDetail(row.details[d], parts, 12);
+        for (int i = 0; i < cnt && n < 63; i++) {
+            items[n].p = parts[i];
+            items[n].wide = (parts[i].label[0] == 0);
+            n++;
+        }
+    }
+    // 面板不画的补充信息，只在设置页跟着同一行排开。
+    for (int d = 0; d < row.extraCount && n < 63; d++) {
+        int cnt = SplitDetail(row.extra[d], parts, 12);
+        for (int i = 0; i < cnt && n < 63; i++) {
+            items[n].p = parts[i];
+            items[n].wide = (parts[i].label[0] == 0);
+            n++;
+        }
+    }
+
+    int line = 0;
+    int i = 0;
+    while (i < n) {
+        float yy = ry + line * step;
+        if (items[i].wide) {
+            SText(g, items[i].p.value, 12, FW_NORMAL, u.t75, light, x0, yy, lineW,
+                kUiLineH * s);
+            i++;
+            line++;
+            continue;
+        }
+
+        // 一行放得下几组 KV，就放几组；剩下的宽度平均分给组与组之间，
+        // 让整行贴到卡片右内边距（否则右半边全是空白）。
+        int j = i;
+        float used = 0;
+        while (j < n && !items[j].wide) {
+            float pw = UiKvWidth(items[j].p, s, keyW);
+            if (j > i && used + kUiCellGap * s + pw > lineW) break;
+            used += (j > i ? kUiCellGap * s : 0) + pw;
+            j++;
+        }
+        float extra = lineW - used;
+        float add = (j - i > 1 && extra > 0) ? extra / (j - i - 1) : 0;
+        float cx = x0;
+        for (int k = i; k < j; k++) {
+            float pw = UiKvWidth(items[k].p, s, keyW);
+            SText(g, items[k].p.label, 12, FW_NORMAL, u.t50, light, cx, yy,
                 keyW * s, kUiLineH * s);
             Gdiplus::Pen sep(u.line, 1.0f);
             float sx = cx + keyW * s;
-            g.DrawLine(&sep, sx, ry + line * step + 5 * s, sx,
-                ry + line * step + kUiLineH * s - 5 * s);
+            g.DrawLine(&sep, sx, yy + 5 * s, sx, yy + kUiLineH * s - 5 * s);
             float vx = sx + (1 + kUiKeyGap) * s;
-            SText(g, parts[i].value, 12, FW_NORMAL, u.t90, light, vx, ry + line * step,
+            SText(g, items[k].p.value, 12, FW_NORMAL, u.t90, light, vx, yy,
                 cx + pw - vx, kUiLineH * s);
-            used += pw + kUiCellGap * s;
+            cx += pw + kUiCellGap * s + add;
         }
+        i = j;
+        line++;
     }
 
     return UiSectionHeight(lines);
