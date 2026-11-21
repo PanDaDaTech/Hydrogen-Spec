@@ -6806,8 +6806,49 @@ static void DrawTrayItem(const DRAWITEMSTRUCT* d)
         (double)s);
 }
 
+static LRESULT CALLBACK MenuOwnerProc(HWND h, UINT m, WPARAM w, LPARAM l)
+{
+    if (m == WM_MEASUREITEM) {
+        MEASUREITEMSTRUCT* mis = (MEASUREITEMSTRUCT*)l;
+        if (mis && mis->CtlType == ODT_MENU) {
+            const unsigned dpi = g_dpi ? g_dpi : 96;
+            const float ds = (float)dpi / 96.0f;
+            mis->itemHeight = (UINT)((mis->itemData ? 30.0f : 9.0f) * ds);
+            mis->itemWidth = (UINT)(196.0f * ds);
+            return TRUE;
+        }
+    } else if (m == WM_DRAWITEM) {
+        DRAWITEMSTRUCT* d = (DRAWITEMSTRUCT*)l;
+        if (d && d->CtlType == ODT_MENU) {
+            DrawTrayItem(d);
+            return TRUE;
+        }
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+static HWND EnsureMenuOwner(void)
+{
+    static HWND owner = NULL;
+    if (owner) return owner;
+    WNDCLASSEXW wc;
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = MenuOwnerProc;
+    wc.hInstance = GetModuleHandleW(NULL);
+    wc.lpszClassName = L"HSpecMenuOwner";
+    RegisterClassExW(&wc);
+    owner = CreateWindowExW(0, L"HSpecMenuOwner", L"", WS_POPUP,
+        -32000, -32000, 1, 1, NULL, NULL, wc.hInstance, NULL);
+    if (owner) ShowWindow(owner, SW_SHOWNA);
+    return owner;
+}
+
 static void ShowTrayMenu(HWND hwnd)
 {
+    // 面板是 WS_EX_TRANSPARENT 的分层窗口，不能直接当菜单 owner，
+    // 否则菜单能显示、也能 hover，但点击落不到菜单上。
+    HWND menuOwner = EnsureMenuOwner();
     POINT pt;
     GetCursorPos(&pt);
     bool settingsOpen = (g_setHwnd && IsWindowVisible(g_setHwnd));
@@ -6859,9 +6900,9 @@ static void ShowTrayMenu(HWND hwnd)
     mi.hbrBack = s_menuBrush;
     SetMenuInfo(menu, &mi);
 
-    SetForegroundWindow(hwnd);
+    SetForegroundWindow(menuOwner);
     int cmd = (int)TrackPopupMenu(menu,
-        TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.x, pt.y, 0, hwnd, NULL);
+        TPM_RETURNCMD | TPM_RIGHTBUTTON | TPM_NONOTIFY, pt.x, pt.y, 0, menuOwner, NULL);
     DestroyMenu(menu);
     PostMessageW(hwnd, WM_NULL, 0, 0);
 
