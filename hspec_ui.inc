@@ -156,12 +156,13 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
 
     switch (icon) {
     case UI_CPU:
+        // mockup i-cpu：芯片方框 + 内核方框 + 每边三根引脚
         Rect(5, 5, 14, 14, 2);
         Rect(9.5f, 9.5f, 5, 5, 0.6f);
-        Line(9, 2.4f, 9, 5); Line(15, 2.4f, 15, 5);
-        Line(9, 19, 9, 21.6f); Line(15, 19, 15, 21.6f);
-        Line(2.4f, 9, 5, 9); Line(2.4f, 15, 5, 15);
-        Line(19, 9, 21.6f, 9); Line(19, 15, 21.6f, 15);
+        Line(8, 2, 8, 5); Line(12, 2, 12, 5); Line(16, 2, 16, 5);
+        Line(8, 19, 8, 22); Line(12, 19, 12, 22); Line(16, 19, 16, 22);
+        Line(2, 8, 5, 8); Line(2, 12, 5, 12); Line(2, 16, 5, 16);
+        Line(19, 8, 22, 8); Line(19, 12, 22, 12); Line(19, 16, 22, 16);
         break;
     case UI_BOARD:
         Rect(2.5f, 4, 19, 16, 2);
@@ -169,8 +170,9 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
         Line(15, 8, 15, 16); Line(18, 8, 18, 16);
         Line(6, 16.4f, 12, 16.4f);
         break;    case UI_RAM:
-        Rect(2, 7, 20, 10, 1.2f);
-        Line(8.4f, 7, 8.4f, 17); Line(14.8f, 7, 14.8f, 17);
+        // mockup i-ram：内存条 + 两条缺口 + 五根引脚
+        Rect(2, 7, 20, 10, 1.5f);
+        Line(8.5f, 12, 8.5f, 17); Line(14.5f, 12, 14.5f, 17);
         Line(4, 17, 4, 19); Line(8, 17, 8, 19); Line(12, 17, 12, 19);
         Line(16, 17, 16, 19); Line(20, 17, 20, 19);
         break;
@@ -237,19 +239,9 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
         Line(12, 15.8f, 12, 21);
         break;
     case UI_REFRESH: {
-        // 断口在右上，箭头贴在断口上沿、沿切线方向，16px 下仍能读出“转一圈”。
-        // 顺时针：(350° 起画 280°) 收到正上方，箭头在断口里指向右，和环的末端接上。
-        g.DrawArc(&pen, X(3.9f), Y(3.9f), 16.2f * k, 16.2f * k, 340, 290);
-        Gdiplus::Color rc;
-        pen.GetColor(&rc);
-        Gdiplus::SolidBrush rb(rc);
-        Gdiplus::GraphicsPath tri;
-        { Gdiplus::PointF tp[3] = {
-            Gdiplus::PointF(X(18.3f), Y(4.6f)),
-            Gdiplus::PointF(X(12.1f), Y(1.7f)),
-            Gdiplus::PointF(X(12.1f), Y(7.5f)) };
-          tri.AddPolygon(tp, 3); }
-        g.FillPath(&rb, &tri);
+        // mockup i-refresh：从右侧 (20,12) 逆时针画到右上 (17.4,6.1)，再补一个方角箭头。
+        g.DrawArc(&pen, X(4), Y(4), 16 * k, 16 * k, 0, 322.6f);
+        { float pts[] = { 20, 4.4f, 20, 10, 14.4f, 10 }; Poly(pts, 3); }
         break;
     }
     case UI_COPY:
@@ -280,12 +272,13 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
         break;
     }
     case UI_GEAR:
+        // mockup i-gear：圆 + 八根向外的辐条 + 内圈
         Ell(12, 12, 6.4f);
-        Ell(12, 12, 1.7f);
+        Ell(12, 12, 1.6f);
         for (int i = 0; i < 8; i++) {
             double a = i * 3.14159265358979 / 4.0;
-            Line((float)(12 + cos(a) * 7.4), (float)(12 + sin(a) * 7.4),
-                 (float)(12 + cos(a) * 9.2), (float)(12 + sin(a) * 9.2));
+            Line((float)(12 + cos(a) * 6.4), (float)(12 + sin(a) * 6.4),
+                 (float)(12 + cos(a) * 8.6), (float)(12 + sin(a) * 8.6));
         }
         break;
     case UI_BACK:
@@ -299,8 +292,9 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
         Line(12, 12, 15.4f, 13.6f);
         break;
     case UI_RING:
+        // mockup i-ring：圆环 + 顶端的实心点
         Ell(12, 12, 6.6f);
-        { Gdiplus::SolidBrush b(col); g.FillEllipse(&b, X(10.4f), Y(2.6f), 3.2f * k, 3.2f * k); }
+        { Gdiplus::SolidBrush b(col); g.FillEllipse(&b, X(10.2f), Y(2.4f), 3.6f * k, 3.6f * k); }
         break;
     case UI_WINDOW:
         Rect(3, 4, 18, 16, 2.6f);
