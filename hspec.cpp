@@ -3215,10 +3215,8 @@ static void ComputeLayout(void)
         g_chipSize = (int)(30.0 * s + 0.5);
         g_splitPad = (int)(10.0 * s + 0.5);
         g_splitGap = (int)(7.0 * s + 0.5);
-        // A card spends padding on both sides, so the window widens just
-        // enough to keep the text column identical to the plain theme (no
-        // new truncation).
-        g_winW = (int)((CardMode() ? 526.0 : 480.0) * s + 0.5);
+        // 所有主题用同一块面板宽度：切主题时文字列不会左右跳。
+        g_winW = (int)(526.0 * s + 0.5);
 
         int h;
         if (g_cfg.theme == THEME_SPLIT) {
@@ -3868,8 +3866,8 @@ static bool RenderInternal(void)
     bool darkCard = card ? EffectiveDark() : g_lightText;
     Palette pal = MakePalette(darkCard, cardAlpha);
 
-    const Gdiplus::Color titleColor = card ? pal.title : g_titleColor;
-    const Gdiplus::Color detailColor = card ? pal.detail : g_detailColor;
+    const Gdiplus::Color titleColor = card ? (darkCard ? kTitleColorLight : kTitleColorDark) : g_titleColor;
+    const Gdiplus::Color detailColor = card ? (darkCard ? kDetailColorLight : kDetailColorDark) : g_detailColor;
     const Gdiplus::Color iconColor = card ? pal.chipFg : g_iconColor;
     const bool lightText = card ? pal.darkCard : g_lightText;
 
@@ -3897,7 +3895,7 @@ static bool RenderInternal(void)
     float y = card ? (float)(g_cardMargin + g_padY) : (float)g_padTop;
     if (split) y = (float)g_cardMargin + (float)g_splitPad;
     float textX = (float)(g_cardMargin + g_padX + g_chipSize + g_gapX);
-    float textW = (float)g_winW - textX - (float)(card ? g_cardMargin + g_padX : 4.0 * s);
+    float textW = (float)g_winW - textX - (float)(g_cardMargin + g_padX);
 
     for (int i = 0; i < g_rowCount; i++) {
         UiRow& row = g_rows[i];
@@ -6787,11 +6785,15 @@ static void DrawTrayItem(const DRAWITEMSTRUCT* d)
         (float)(d->rcItem.right - d->rcItem.left),
         (float)(d->rcItem.bottom - d->rcItem.top));
 
-    const bool dark = true;   // 菜单固定深色，和 DSH 的右键菜单观感一致
-    const Gdiplus::Color bgC(255, 35, 36, 41);
-    const Gdiplus::Color sepC(255, 58, 60, 69);
+    const bool dark = EffectiveDark();
+    const Gdiplus::Color bgC = dark ? Gdiplus::Color(255, 35, 36, 41)
+                                    : Gdiplus::Color(255, 255, 255);
+    const Gdiplus::Color sepC = dark ? Gdiplus::Color(255, 58, 60, 69)
+                                     : Gdiplus::Color(255, 226, 228, 233);
 
     if (!text) {
+        Gdiplus::SolidBrush sbg(bgC);
+        g.FillRectangle(&sbg, rc);
         Gdiplus::Pen pen(sepC, 1.0f);
         g.DrawLine(&pen, rc.X + 10 * s, rc.Y + rc.Height * 0.5f,
             rc.GetRight() - 10 * s, rc.Y + rc.Height * 0.5f);
@@ -6821,8 +6823,10 @@ static void DrawTrayItem(const DRAWITEMSTRUCT* d)
         g.DrawLine(&pen, cx - 0.8f * s, cy + 2.4f * s, cx + 4 * s, cy - 3 * s);
     }
 
-    Gdiplus::Color tc = dim ? Gdiplus::Color(255, 128, 130, 139)
-                            : Gdiplus::Color(255, 233, 234, 238);
+    Gdiplus::Color tc = dim ? (dark ? Gdiplus::Color(255, 128, 130, 139)
+                                   : Gdiplus::Color(255, 146, 148, 156))
+                            : (dark ? Gdiplus::Color(255, 233, 234, 238)
+                                    : Gdiplus::Color(255, 32, 33, 38));
     bool darkInk = ((int)tc.GetR() + (int)tc.GetG() + (int)tc.GetB()) < 384;
     DrawTextGdiLine(g, text, 20, FW_NORMAL, tc, darkInk,
         (int)(rc.X + 30 * s), (int)rc.Y, (int)(rc.Width - 40 * s), (int)rc.Height,
@@ -6877,7 +6881,8 @@ static bool SaveMenuPng(const wchar_t* path)
     HGDIOBJ old = SelectObject(dc, bmp);
 
     Gdiplus::Graphics gg(dc);
-    Gdiplus::SolidBrush bgFill(Gdiplus::Color(255, 35, 36, 41));
+    Gdiplus::SolidBrush bgFill(EffectiveDark() ? Gdiplus::Color(255, 35, 36, 41)
+                                               : Gdiplus::Color(255, 255, 255));
     gg.FillRectangle(&bgFill, Gdiplus::Rect(0, 0, W, H));
 
     int y = (int)(4 * s);
