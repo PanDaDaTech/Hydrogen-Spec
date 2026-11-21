@@ -512,10 +512,19 @@ static float UiKeyWidthFor(const wchar_t* const* labels, int n, float s)
     return dp;
 }
 
+static float UiKvLabelW(const KvPair& kv, float s)
+{
+    if (!kv.label[0]) return 0;
+    float px = (float)UiTextW(kv.label, 12.0f) / (s > 0 ? s : 1) + 6.0f;
+    if (px > kUiKeyW) px = kUiKeyW;
+    return px;
+}
+
 static float UiKvWidth(const KvPair& kv, float s, float keyW)
 {
+    (void)keyW;
     if (kv.label[0])
-        return (keyW + 1 + kUiKeyGap) * s + UiTextW(kv.value, 12.0f);
+        return (UiKvLabelW(kv, s) + 4 + 1 + kUiKeyGap) * s + UiTextW(kv.value, 12.0f);
     return UiTextW(kv.value, 12.0f);
 }
 
@@ -721,11 +730,12 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         float cx = x0;
         for (int k = i; k < j; k++) {
             float pw = UiKvWidth(items[k].p, s, keyW);
+            float lw = UiKvLabelW(items[k].p, s) * s;
             SText(g, items[k].p.label, 12, FW_NORMAL, u.t50, light, cx, yy,
-                keyW * s - 6 * s, kUiLineH * s,
+                lw, kUiLineH * s,
                 DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
             Gdiplus::Pen sep(u.line, 1.0f);
-            float sx = cx + keyW * s;
+            float sx = cx + lw + 4 * s;
             g.DrawLine(&sep, sx, yy + 5 * s, sx, yy + kUiLineH * s - 5 * s);
             float vx = sx + (1 + kUiKeyGap) * s;
             float vw = cx + pw - vx;
