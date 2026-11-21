@@ -1579,14 +1579,17 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     float cx = x + w * 0.5f;
     float cy = y + 44 * s;
 
-    if (g_logoLight) {
-        Gdiplus::Bitmap* logo = light ? g_logoDark : g_logoLight;
-        if (logo && logo->GetLastStatus() == Gdiplus::Ok)
-            g.DrawImage(logo, Gdiplus::RectF(cx - 37 * s, cy, 74 * s, 74 * s));
+    // 品牌块：无论有没有位图都先铺一层淡品牌色圆角底，
+    // 这样关于页看起来是「应用图标」，而不是一枚漂在页面上的显示器。
+    Gdiplus::RectF tile(cx - 37 * s, cy, 74 * s, 74 * s);
+    FillRound(g, tile, 20 * s, UiClr(u.primary, 26));
+
+    Gdiplus::Bitmap* logo = light ? g_logoDark : g_logoLight;
+    if (logo && logo->GetLastStatus() == Gdiplus::Ok) {
+        const float lz = 52 * s;
+        g.DrawImage(logo, Gdiplus::RectF(cx - lz * 0.5f,
+            cy + (74 * s - lz) * 0.5f, lz, lz));
     } else {
-        // 没有位图 logo 时用品牌色块兜底
-        Gdiplus::RectF tile(cx - 37 * s, cy, 74 * s, 74 * s);
-        FillRound(g, tile, 20 * s, UiClr(u.primary, 30));
         DrawUiIcon(g, UI_GPU, UiCX(tile), UiCY(tile), 38 * s, u.primary);
     }
     cy += 74 * s + 16 * s;
@@ -1735,7 +1738,7 @@ static void UiRail(Gdiplus::Graphics& g, const UiStyle& u, bool light, float h, 
         y += 48 * s;
         struct { int icon; const wchar_t* label; } items[4] = {
             { UI_RING, L"外观" }, { UI_RAM, L"显示内容" }, { UI_WINDOW, L"窗口" },
-            { UI_NPU, L"关于" },
+            { UI_INFO, L"关于" },
         };
         for (int i = 0; i < 4; i++) {
             UiRailItem(g, u, light, x, y, w, s, items[i].icon, items[i].label,
