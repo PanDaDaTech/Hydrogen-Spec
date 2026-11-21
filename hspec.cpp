@@ -6513,7 +6513,7 @@ static void PillPlace(void)
     mi.cbSize = sizeof(mi);
     GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi);
     const float ps = g_dpi / 96.0f;
-    const int size = (int)(48 * ps + 0.5f);
+    const int size = (int)(40 * ps + 0.5f);
     int x = mi.rcWork.right - size - (int)(18 * ps);
     int y = mi.rcWork.bottom - size - (int)(18 * ps);
 
