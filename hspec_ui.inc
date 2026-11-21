@@ -98,7 +98,7 @@ enum UiIcon
     UI_MONITOR, UI_BATTERY, UI_AUDIO, UI_PLUG, UI_REFRESH, UI_COPY, UI_DOC,
     UI_GEAR, UI_BACK, UI_RING, UI_WINDOW, UI_EYE_OFF, UI_MIN, UI_CLOSE,
     UI_CHEVRON, UI_CARET, UI_UP, UI_DOWN, UI_LEFT, UI_RIGHT, UI_CHECK,
-    UI_IMAGE, UI_CODE, UI_INFO, UI_CLOCK, UI_COUNT_
+    UI_IMAGE, UI_CODE, UI_INFO, UI_CLOCK, UI_EXPORT, UI_COUNT_
 };
 
 static void UiRoundRectPath(Gdiplus::GraphicsPath& p, float x, float y, float w, float h, float r)
@@ -236,10 +236,21 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
           (void)pts; }
         Line(12, 15.8f, 12, 21);
         break;
-    case UI_REFRESH:
-        g.DrawArc(&pen, X(4), Y(4), 16 * k, 16 * k, -60, 300);
-        { float pts[] = { 20, 4.4f, 20, 10.2f, 14.2f, 10.2f }; Poly(pts, 3); }
+    case UI_REFRESH: {
+        // 断口在右上，箭头贴在断口上沿、沿切线方向，16px 下仍能读出“转一圈”。
+        g.DrawArc(&pen, X(4.8f), Y(4.8f), 14.4f * k, 14.4f * k, -30, 285);
+        Gdiplus::Color rc;
+        pen.GetColor(&rc);
+        Gdiplus::SolidBrush rb(rc);
+        Gdiplus::GraphicsPath tri;
+        { Gdiplus::PointF tp[3] = {
+            Gdiplus::PointF(X(20.6f), Y(4.4f)),
+            Gdiplus::PointF(X(14.9f), Y(5.6f)),
+            Gdiplus::PointF(X(18.7f), Y(9.6f)) };
+          tri.AddPolygon(tp, 3); }
+        g.FillPath(&rb, &tri);
         break;
+    }
     case UI_COPY:
         Rect(8.6f, 8.6f, 10.8f, 10.8f, 2.4f);
         { Gdiplus::GraphicsPath p;
@@ -315,6 +326,19 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
     case UI_CHEVRON:
         { float pts[] = { 6.5f, 9.5f, 12, 15, 17.5f, 9.5f }; Poly(pts, 3); }
         break;
+    case UI_EXPORT: {
+        // 托盘 + 向上箭头：导出。两段圆弧收角，16px 下也分得清。
+        Gdiplus::GraphicsPath p;
+        p.AddLine(Gdiplus::PointF(X(5.2f), Y(13.2f)), Gdiplus::PointF(X(5.2f), Y(17.6f)));
+        p.AddArc(X(5.2f), Y(15.6f), 4 * k, 4 * k, 90, 90);
+        p.AddLine(Gdiplus::PointF(X(7.2f), Y(19.6f)), Gdiplus::PointF(X(16.8f), Y(19.6f)));
+        p.AddArc(X(14.8f), Y(15.6f), 4 * k, 4 * k, 0, 90);
+        p.AddLine(Gdiplus::PointF(X(18.8f), Y(17.6f)), Gdiplus::PointF(X(18.8f), Y(13.2f)));
+        g.DrawPath(&pen, &p);
+        g.DrawLine(&pen, X(12), Y(4.4f), X(12), Y(14.2f));
+        { float pts[] = { 7.8f, 8.6f, 12, 4.4f, 16.2f, 8.6f }; Poly(pts, 3); }
+        break;
+    }
     case UI_CARET:
         { float pts[] = { 6.5f, 9.5f, 12, 15, 17.5f, 9.5f }; Poly(pts, 3); }
         break;
@@ -452,7 +476,7 @@ static void UiSegmented(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
 static bool UiButton(Gdiplus::Graphics& g, const UiStyle& u, bool light, float x, float y,
     float w, float h, const wchar_t* label, int icon, bool primary, bool hover, int act,
-    bool disabled = false)
+    bool disabled = false, float trailing = 0)
 {
     float s = (float)SettingsScale();
     Gdiplus::RectF rc(x, y, w, h);
@@ -469,11 +493,15 @@ static bool UiButton(Gdiplus::Graphics& g, const UiStyle& u, bool light, float x
                                 : (disabled ? u.t40 : (hover ? u.deepText : u.t75));
     if (icon >= 0) {
         float iw = UiTextW(label, 13);
-        float total = 15 * s + 6 * s + iw;
+        float total = 16 * s + 7 * s + iw + trailing;
         float tx = rc.X + (rc.Width - total) * 0.5f;
-        DrawUiIcon(g, icon, tx + 7.5f * s, rc.Y + rc.Height * 0.5f, 15 * s, fg);
-        SText(g, label, 13, FW_NORMAL, fg, light, tx + 21 * s, rc.Y,
+        DrawUiIcon(g, icon, tx + 8 * s, rc.Y + rc.Height * 0.5f, 16 * s, fg);
+        SText(g, label, 13, FW_NORMAL, fg, light, tx + 23 * s, rc.Y,
             iw + 2 * s, rc.Height);
+        if (trailing > 0) {
+            DrawUiIcon(g, UI_CARET, tx + 16 * s + 7 * s + iw + 6 * s,
+                rc.Y + rc.Height * 0.5f, 11 * s, disabled ? u.t40 : u.t60);
+        }
     } else {
         SText(g, label, 13, FW_NORMAL, fg, light, rc.X, rc.Y, rc.Width, rc.Height,
             DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
@@ -1904,16 +1932,18 @@ static void SettingsDraw(Gdiplus::Graphics& g)
     // 页头右侧动作
     if (g_setMode == 0 && g_mainTab == 0) {
         float by = y + 3 * s;
-        UiButton(g, u, light, x + w - 190 * s, by, 78 * s, 34 * s, L"刷新", UI_REFRESH,
-            false, g_setHot == ACT_REFRESH, ACT_REFRESH);
-        Gdiplus::RectF exportBtn(x + w - 100 * s, by, 100 * s, 34 * s);
-        UiButton(g, u, light, exportBtn.X, exportBtn.Y, exportBtn.Width, exportBtn.Height,
-            L"导出", UI_COPY, false, g_setHot == ACT_EXPORT, ACT_EXPORT);
-        DrawUiIcon(g, UI_CARET, exportBtn.GetRight() - 18 * s, UiCY(exportBtn),
-            11 * s, u.t60);
+        float bh = 32 * s;
+        float bw2 = (30 + 16 + 7 + 6 + 11) * s + UiTextW(L"导出", 13);
+        float bw1 = (30 + 16 + 7) * s + UiTextW(L"刷新", 13);
+        Gdiplus::RectF exportBtn(x + w - bw2, by, bw2, bh);
+        UiButton(g, u, light, exportBtn.X, exportBtn.Y, exportBtn.Width, bh,
+            L"导出", UI_EXPORT, false, g_setHot == ACT_EXPORT, ACT_EXPORT, false, 17 * s);
+        UiButton(g, u, light, exportBtn.X - 8 * s - bw1, by, bw1, bh,
+            L"刷新", UI_REFRESH, false, g_setHot == ACT_REFRESH, ACT_REFRESH);
         g_uiMenuAnchor = exportBtn;
     } else if (g_setMode == 0 && g_mainTab == 1) {
-        UiButton(g, u, light, x + w - 104 * s, y + 3 * s, 104 * s, 34 * s, L"重新检测",
+        float bw = (30 + 16 + 7) * s + UiTextW(L"重新检测", 13);
+        UiButton(g, u, light, x + w - bw, y + 3 * s, bw, 32 * s, L"重新检测",
             UI_REFRESH, false, g_setHot == ACT_REDETECT, ACT_REDETECT);
     }
 
