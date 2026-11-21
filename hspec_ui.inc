@@ -657,7 +657,9 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             tr.Height, DT_CENTER | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
     }
 
-    float keyW = UiSectionKeyW(row, s);
+    // 标签列固定宽度并右对齐：短标签（核心）紧贴竖线，长标签（单条容量）
+    // 也能放下，而且每个分区的竖线都在同一个 x 上，整页节奏一致。
+    float keyW = kUiKeyW;
     int lines = UiKvLines(row, w - 44 * s, s, keyW);
     float ry = hy + chip + 7 * s;
     float lineW = w - 44 * s;
@@ -720,7 +722,8 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         for (int k = i; k < j; k++) {
             float pw = UiKvWidth(items[k].p, s, keyW);
             SText(g, items[k].p.label, 12, FW_NORMAL, u.t50, light, cx, yy,
-                keyW * s, kUiLineH * s);
+                keyW * s - 6 * s, kUiLineH * s,
+                DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
             Gdiplus::Pen sep(u.line, 1.0f);
             float sx = cx + keyW * s;
             g.DrawLine(&sep, sx, yy + 5 * s, sx, yy + kUiLineH * s - 5 * s);
@@ -1384,7 +1387,7 @@ static void PageContentUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     float x, float y, float w, float s)
 {
     struct RowDef { int icon; int toggle; const wchar_t* title; const wchar_t* meta; };
-    const RowDef defs[11] = {
+    const RowDef defs[10] = {
         { UI_CPU, TOGGLE_CPU, L"处理器", L"核心 / 线程 / 缓存" },
         { UI_BOARD, TOGGLE_BOARD, L"主板与固件", L"厂商 / 固件版本 / 启动方式 / 证书" },
         { UI_RAM, TOGGLE_MEM, L"内存", L"品牌 / 频率 / 容量 / 类型" },
@@ -1395,7 +1398,6 @@ static void PageContentUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         { UI_BATTERY, TOGGLE_BATTERY, L"电池", L"设计容量 / 健康度 / 循环次数" },
         { UI_AUDIO, TOGGLE_AUDIO, L"声卡", L"设备名称 / 接口 / 采样率" },
         { UI_NET, TOGGLE_NET, L"网卡", L"名称 / MAC / IP / 速率 / SSID" },
-        { UI_PLUG, TOGGLE_PORTS, L"接口支持", L"USB / 视频 / 读卡器 / 音频" },
     };
 
     bool hasNpu = false;
@@ -1403,11 +1405,11 @@ static void PageContentUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
         if (g_rows[i].icon == ICON_NPU) hasNpu = true;
 
     const float rowH = 56 * s;
-    const float cardH = rowH * 11 + 12 * s;
+    const float cardH = rowH * 10 + 12 * s;
     FillRound(g, MRect(x, y, w, cardH), 16 * s, u.card);
 
     float cy = y + 6 * s;
-    for (int i = 0; i < 11; i++) {
+    for (int i = 0; i < 10; i++) {
         const RowDef& d = defs[i];
         bool disabled = (d.toggle == TOGGLE_NPU && !hasNpu);
         bool on = ToggleValue(d.toggle) != 0;
@@ -2009,10 +2011,13 @@ static bool UiHandleAction(int act)
         return true;
     }
     if (act == ACT_MINIMIZE) {
-        // 没有任务栏入口（toolwindow）时 SW_MINIMIZE 不生效，退回悬浮球。
+        // 真正最小化到任务栏：先临时摘掉 TOOLWINDOW / 挂上 APPWINDOW，
+        // 否则 toolwindow 的 SW_MINIMIZE 会让窗口直接不见。
         if (g_setHwnd) {
+            LONG_PTR ex = GetWindowLongPtrW(g_setHwnd, GWL_EXSTYLE);
+            SetWindowLongPtrW(g_setHwnd, GWL_EXSTYLE,
+                (ex | WS_EX_APPWINDOW) & ~WS_EX_TOOLWINDOW);
             ShowWindow(g_setHwnd, SW_MINIMIZE);
-            if (!IsIconic(g_setHwnd)) HideSettingsToPill();
         }
         return true;
     }

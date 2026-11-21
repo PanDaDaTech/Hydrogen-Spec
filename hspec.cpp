@@ -2644,7 +2644,7 @@ static void BuildModel(void)
         wchar_t modSize[32] = { 0 };
         if (g_smbios.memCount > 0)
             FormatCapacity(g_smbios.mem[0].bytes, modSize, 32);
-        if (modSize[0]) ModelAddKV(r, L"单条容量", modSize);
+        if (modSize[0]) ModelAddKV(r, L"容量", modSize);
         if (firstSpeed > 0) {
             wchar_t sp[32];
             WPrintf(sp, 32, L"%d MHz", firstSpeed);
@@ -2871,46 +2871,6 @@ static void BuildModel(void)
             wcscat_s(line3, 384, nic.gateway);
         }
         if (line3[0]) ModelAddDetail(r, line3);
-    }
-
-    // ---- 接口支持（按设备类是否存在判断）----
-    g_skipSection = !g_cfg.showPorts;
-    {
-        // 只报「有没有这个类别」。设备类枚举会把虚拟网卡、隐藏设备一起数进来
-        // （实测网络类能数出 15 个），拿来做数量就是错信息；以前还写死过
-        // USB「3.x 或更高」这种猜法，同样不可信，一并去掉，只留名字。
-        struct PortSpec
-        {
-            const wchar_t* name;
-            const GUID* cls;
-        };
-        static const PortSpec kPorts[] = {
-            { L"USB", &kUsbClassGuid },
-            { L"键盘", &kKeyboardClassGuid },
-            { L"触控板", &kMouseClassGuid },
-            { L"摄像头", &kImageClassGuid },
-            { L"网络", &kNetClassGuid },
-            { L"SATA", &kScsiClassGuid },
-            { L"光驱", &kCdromClassGuid },
-            { L"音频", &kMediaClassGuid },
-        };
-        UiRow* portRow = NULL;
-        wchar_t line[256] = { 0 };
-        int perLine = 0;
-        for (size_t i = 0; i < sizeof(kPorts) / sizeof(kPorts[0]); i++) {
-            if (CountClassDevices(kPorts[i].cls) <= 0) continue;
-            if (!portRow) portRow = ModelAddRow(ICON_PLUG, L"接口支持");
-            if (perLine > 0) wcscat_s(line, 256, L" · ");
-            wcscat_s(line, 256, kPorts[i].name);
-            // 每 3 个一行：面板最窄时一行放不下 4 个中文类别名，
-            // 3 个既不会截断，两行时也是 3+3 而不是 4+2。
-            if (++perLine >= 3) {
-                ModelAddDetail(portRow, line);
-                line[0] = 0;
-                perLine = 0;
-            }
-        }
-        if (line[0]) ModelAddDetail(portRow, line);
     }
 
     g_skipSection = false;
@@ -4744,8 +4704,16 @@ static void FillTri(Gdiplus::Graphics& g, const Gdiplus::Color& c,
 static void DrawRowIcon(Gdiplus::Graphics& g, int kind, float cx, float cy,
     float r, const Palette& pal)
 {
+    // 卡片里是圆角方块，面板这边也用同样的形状，图标语汇才统一
+    const float cr = r * 0.62f;
+    Gdiplus::GraphicsPath chip;
+    chip.AddArc(cx - r, cy - r, cr * 2, cr * 2, 180, 90);
+    chip.AddArc(cx + r - cr * 2, cy - r, cr * 2, cr * 2, 270, 90);
+    chip.AddArc(cx + r - cr * 2, cy + r - cr * 2, cr * 2, cr * 2, 0, 90);
+    chip.AddArc(cx - r, cy + r - cr * 2, cr * 2, cr * 2, 90, 90);
+    chip.CloseFigure();
     Gdiplus::SolidBrush bg(pal.chipBg);
-    g.FillEllipse(&bg, cx - r, cy - r, r * 2, r * 2);
+    g.FillPath(&bg, &chip);
 
     const float u = r / 10.5f;          // 24dp grid, icon fills ~2/3 of the chip
     Gdiplus::Pen pen(pal.chipFg, 1.8f * u);
@@ -6113,6 +6081,11 @@ static LRESULT CALLBACK SettingsProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM 
     }
     case WM_SIZE:
         SyncSettingsSize();
+        // 从任务栏恢复后，把窗口样式按「隐藏任务栏窗口」重新套回去
+        if (wParam == SIZE_RESTORED || wParam == SIZE_MAXIMIZED) {
+            ApplyWindowVisibility();
+            HidePill();
+        }
         SettingsInvalidate();
         return 0;
 
@@ -6779,51 +6752,58 @@ static bool TrayMenuChecked(int id)
 static void DrawTrayItem(const DRAWITEMSTRUCT* d)
 {
     const wchar_t* text = (const wchar_t*)d->itemData;
+    const float s = (float)g_dpi / 96.0f;
     Gdiplus::Graphics g(d->hDC);
     g.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
     Gdiplus::RectF rc((float)d->rcItem.left, (float)d->rcItem.top,
         (float)(d->rcItem.right - d->rcItem.left),
         (float)(d->rcItem.bottom - d->rcItem.top));
 
+    const bool dark = EffectiveDark();
+    const Gdiplus::Color bgC = dark ? Gdiplus::Color(255, 32, 33, 38)
+                                    : Gdiplus::Color(255, 255, 255, 255);
+    const Gdiplus::Color sepC = dark ? Gdiplus::Color(255, 58, 60, 68)
+                                     : Gdiplus::Color(255, 226, 228, 233);
+
     if (!text) {
-        Gdiplus::Pen pen(Gdiplus::Color(255, 56, 58, 66), 1.0f);
-        g.DrawLine(&pen, rc.X + 12, rc.Y + rc.Height * 0.5f,
-            rc.GetRight() - 12, rc.Y + rc.Height * 0.5f);
+        Gdiplus::Pen pen(sepC, 1.0f);
+        g.DrawLine(&pen, rc.X + 10 * s, rc.Y + rc.Height * 0.5f,
+            rc.GetRight() - 10 * s, rc.Y + rc.Height * 0.5f);
         return;
     }
 
     bool sel = (d->itemState & ODS_SELECTED) != 0;
     bool dim = (d->itemState & ODS_DISABLED) != 0;   // 标题行用 MF_GRAYED 表达
-    Gdiplus::SolidBrush bg(sel ? Gdiplus::Color(255, 48, 50, 58)
-                               : Gdiplus::Color(255, 28, 29, 34));
+    Gdiplus::SolidBrush bg(bgC);
     g.FillRectangle(&bg, rc);
     if (sel) {
-        Gdiplus::SolidBrush hl(Gdiplus::Color(255, 64, 67, 80));
+        Gdiplus::SolidBrush hl(dark ? Gdiplus::Color(255, 51, 53, 61)
+                                    : Gdiplus::Color(255, 240, 242, 247));
         Gdiplus::GraphicsPath path;
-        UiRoundRectPath(path, rc.X + 6, rc.Y + 2.5f, rc.Width - 12,
-            rc.Height - 5, 7.0f);
+        UiRoundRectPath(path, rc.X + 4 * s, rc.Y + 2 * s, rc.Width - 8 * s,
+            rc.Height - 4 * s, 7 * s);
         g.FillPath(&hl, &path);
     }
 
     if (TrayMenuChecked((int)d->itemID)) {
-        Gdiplus::Pen pen(Gdiplus::Color(255, 150, 156, 255), 1.7f);
+        Gdiplus::Pen pen(dark ? Gdiplus::Color(255, 150, 156, 255)
+                              : Gdiplus::Color(255, 96, 110, 235), 1.7f * s);
         pen.SetStartCap(Gdiplus::LineCapRound);
         pen.SetEndCap(Gdiplus::LineCapRound);
-        float cx = rc.X + 17, cy = rc.Y + rc.Height * 0.5f;
-        g.DrawLine(&pen, cx - 3.5f, cy, cx - 1.0f, cy + 2.6f);
-        g.DrawLine(&pen, cx - 1.0f, cy + 2.6f, cx + 4.0f, cy - 3.0f);
+        float cx = rc.X + 15 * s, cy = rc.Y + rc.Height * 0.5f;
+        g.DrawLine(&pen, cx - 3.2f * s, cy, cx - 0.8f * s, cy + 2.4f * s);
+        g.DrawLine(&pen, cx - 0.8f * s, cy + 2.4f * s, cx + 4 * s, cy - 3 * s);
     }
 
-    Gdiplus::Color tc = dim ? Gdiplus::Color(255, 126, 128, 138)
-                            : Gdiplus::Color(255, 228, 229, 235);
-    Gdiplus::FontFamily fam(L"MiSans");
-    Gdiplus::Font font(&fam, 12.5f, Gdiplus::FontStyleRegular, Gdiplus::UnitPixel);
-    Gdiplus::SolidBrush tb(tc);
-    Gdiplus::StringFormat fmt;
-    fmt.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-    fmt.SetFormatFlags(Gdiplus::StringFormatFlagsNoWrap);
-    g.DrawString(text, -1, &font, Gdiplus::RectF(rc.X + 32, rc.Y,
-        rc.Width - 44, rc.Height), &fmt, &tb);
+    Gdiplus::Color tc = dim ? (dark ? Gdiplus::Color(255, 128, 129, 138)
+                                    : Gdiplus::Color(255, 150, 152, 160))
+                            : (dark ? Gdiplus::Color(255, 232, 233, 238)
+                                    : Gdiplus::Color(255, 34, 36, 42));
+    bool darkInk = ((int)tc.GetR() + (int)tc.GetG() + (int)tc.GetB()) < 384;
+    DrawTextGdiLine(g, text, 12, FW_NORMAL, tc, darkInk,
+        (int)(rc.X + 30 * s), (int)rc.Y, (int)(rc.Width - 42 * s), (int)rc.Height,
+        DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
+        (double)s);
 }
 
 static void ShowTrayMenu(HWND hwnd)
@@ -6868,7 +6848,15 @@ static void ShowTrayMenu(HWND hwnd)
 
     MENUINFO mi = { sizeof(mi) };
     mi.fMask = MIM_BACKGROUND;
-    mi.hbrBack = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    static HBRUSH s_menuBrush = NULL;
+    static bool s_menuBrushDark = false;
+    bool menuDark = EffectiveDark();
+    if (!s_menuBrush || s_menuBrushDark != menuDark) {
+        if (s_menuBrush) DeleteObject(s_menuBrush);
+        s_menuBrush = CreateSolidBrush(menuDark ? RGB(32, 33, 38) : RGB(255, 255, 255));
+        s_menuBrushDark = menuDark;
+    }
+    mi.hbrBack = s_menuBrush;
     SetMenuInfo(menu, &mi);
 
     SetForegroundWindow(hwnd);
@@ -6971,8 +6959,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     case WM_MEASUREITEM: {
         MEASUREITEMSTRUCT* m = (MEASUREITEMSTRUCT*)lParam;
         if (m && m->CtlType == ODT_MENU) {
-            m->itemHeight = m->itemData ? 30 : 9;
-            m->itemWidth = 168;
+            const unsigned dpi = g_dpi ? g_dpi : 96;
+            const float ds = (float)dpi / 96.0f;
+            m->itemHeight = (UINT)((m->itemData ? 30.0f : 9.0f) * ds);
+            m->itemWidth = (UINT)(196.0f * ds);
             return TRUE;
         }
         break;
