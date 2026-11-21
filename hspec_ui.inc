@@ -629,7 +629,7 @@ static void UiSetContentEnd(float endY)
 static float UiSectionHeight(int lines)
 {
     float s = (float)SettingsScale();
-    return (10 + 32 + 7 + 9) * s + lines * kUiLineH * s + (lines - 1) * 2 * s;
+    return (10 + 32 + 7 + 9) * s + lines * kUiLineH * s;
 }
 
 static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
@@ -662,7 +662,7 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     float ry = hy + chip + 7 * s;
     float lineW = w - 44 * s;
     float x0 = x + 44 * s;
-    float step = kUiLineH * s + 2 * s;
+    float step = kUiLineH * s;
 
     KvPair parts[12];
     struct DrawItem { KvPair p; bool wide; };
@@ -698,8 +698,9 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             continue;
         }
 
-        // 一行放得下几组 KV，就放几组；剩下的宽度平均分给组与组之间，
-        // 让整行贴到卡片右内边距（否则右半边全是空白）。
+        // 一行放得下几组 KV，就放几组。组间距在 24dp 基础上最多各加 32dp，
+        // 大致铺满卡片，又不会在短值后面拉出长条空白；值按自然宽度绘制，
+        // 型号 / MAC 这类长值不会被截断。
         int j = i;
         float used = 0;
         while (j < n && !items[j].wide) {
@@ -708,8 +709,13 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             used += (j > i ? kUiCellGap * s : 0) + pw;
             j++;
         }
-        float extra = lineW - used;
-        float add = (j - i > 1 && extra > 0) ? extra / (j - i - 1) : 0;
+        int count = j - i;
+        float leftover = lineW - used;
+        float add = 0;
+        if (count > 1 && leftover > 0) {
+            float share = leftover / (float)(count - 1);
+            add = (share < 32 * s) ? share : 32 * s;
+        }
         float cx = x0;
         for (int k = i; k < j; k++) {
             float pw = UiKvWidth(items[k].p, s, keyW);
@@ -719,8 +725,11 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             float sx = cx + keyW * s;
             g.DrawLine(&sep, sx, yy + 5 * s, sx, yy + kUiLineH * s - 5 * s);
             float vx = sx + (1 + kUiKeyGap) * s;
+            float vw = cx + pw - vx;
+            if (vx + vw > x0 + lineW) vw = x0 + lineW - vx;
+            if (vw < 0) vw = 0;
             SText(g, items[k].p.value, 12, FW_NORMAL, u.t90, light, vx, yy,
-                cx + pw - vx, kUiLineH * s);
+                vw, kUiLineH * s);
             cx += pw + kUiCellGap * s + add;
         }
         i = j;
