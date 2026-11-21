@@ -4304,7 +4304,9 @@ enum
     ACT_OPACITY = 32,
     ACT_RADIUS = 33,
     ACT_LIGHT = 34,      // + 0 follow / 1 light / 2 dark
-    ACT_SWATCH = 36,     // + 0 wallpaper, 1..5 preset hue
+    // 36..41 会和 ACT_TOGGLE(40) 撞车：第 4、5 个色块会被当成开关处理，
+    // 点了反而切换「处理器/主板」的显示。挪到 110 段，避开所有连续区间。
+    ACT_SWATCH = 110,    // + 0 wallpaper, 1..5 preset hue
     ACT_TOGGLE = 40,     // + toggle index
     ACT_GITHUB = 50,
     ACT_COPYVER = 51,
