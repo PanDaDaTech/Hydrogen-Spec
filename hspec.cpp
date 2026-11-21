@@ -2772,7 +2772,12 @@ static void BuildModel(void)
         if (ReadBattery(&bat)) {
             // 设备描述是「Microsoft ACPI 兼容的控制方法电池」这类驱动层名字，
             // 对用户没有意义，标题固定写「电池」，容量信息走明细。
-            r = ModelAddRow(ICON_BATTERY, L"电池");
+            wchar_t btitle[64];
+            if (bat.percent >= 0)
+                WPrintf(btitle, 64, L"电池：%d%%", bat.percent);
+            else
+                wcscpy_s(btitle, L"电池");
+            r = ModelAddRow(ICON_BATTERY, btitle);
 
             int designed = bat.designed;
             int fullCap = bat.full;
@@ -2804,11 +2809,6 @@ static void BuildModel(void)
                 wchar_t v[32];
                 WPrintf(v, 32, L"%d 次", bat.cycles);
                 ModelAddKV(r, L"循环次数", v);
-            }
-            if (bat.percent >= 0) {
-                wchar_t v[32];
-                WPrintf(v, 32, L"%d%%", bat.percent);
-                ModelAddKV(r, L"当前电量", v);
             }
         }
     }
@@ -3515,16 +3515,16 @@ static void DrawGlyph(Gdiplus::Graphics& g, Gdiplus::Pen& pen, int kind,
         break;
     }
     case ICON_AUDIO: {
-        Gdiplus::GraphicsPath p;
-        p.AddLine(x + 3.5f * u, y + 9.4f * u, x + 7 * u, y + 9.4f * u);
-        p.AddLine(x + 7 * u, y + 9.4f * u, x + 11.6f * u, y + 5.4f * u);
-        p.AddLine(x + 11.6f * u, y + 5.4f * u, x + 11.6f * u, y + 18.6f * u);
-        p.AddLine(x + 11.6f * u, y + 18.6f * u, x + 7 * u, y + 14.6f * u);
-        p.AddLine(x + 7 * u, y + 14.6f * u, x + 3.5f * u, y + 14.6f * u);
-        p.CloseFigure();
-        g.DrawPath(&pen, &p);
-        // 只留一道外弧：小尺寸下两道弧会糊成一条横线。
-        g.DrawArc(&pen, x + 12.0f * u, y + 5.6f * u, 9.6f * u, 12.8f * u, -50.0f, 100.0f);
+        // 耳机轮廓：头梁 + 两个实心耳罩。比喇叭+声波更耐缩小，17px 下也不会糊成一条线。
+        g.DrawArc(&pen, x + 4.0f * u, y + 4.2f * u, 16.0f * u, 16.0f * u, 197.0f, 146.0f);
+        Gdiplus::Color pc;
+        pen.GetColor(&pc);
+        Gdiplus::SolidBrush cupBrush(pc);
+        Gdiplus::GraphicsPath lp, rp;
+        AddRoundRect(lp, Gdiplus::RectF(x + 3.4f * u, y + 11.6f * u, 3.8f * u, 6.6f * u), 1.7f * u);
+        AddRoundRect(rp, Gdiplus::RectF(x + 16.8f * u, y + 11.6f * u, 3.8f * u, 6.6f * u), 1.7f * u);
+        g.FillPath(&cupBrush, &lp);
+        g.FillPath(&cupBrush, &rp);
         break;
     }
     case ICON_CLOCK: {

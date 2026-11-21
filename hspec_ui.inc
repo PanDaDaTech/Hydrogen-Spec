@@ -210,17 +210,16 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
         Line(5.6f, 10.4f, 5.6f, 13.6f); Line(9.2f, 10.4f, 9.2f, 13.6f);
         break;
     case UI_AUDIO: {
-        Gdiplus::GraphicsPath p;
-        p.StartFigure();
-        p.AddLine(Gdiplus::PointF(X(4), Y(9.8f)), Gdiplus::PointF(X(6.8f), Y(9.8f)));
-        p.AddLine(Gdiplus::PointF(X(6.8f), Y(9.8f)), Gdiplus::PointF(X(10.6f), Y(6.2f)));
-        p.AddLine(Gdiplus::PointF(X(10.6f), Y(6.2f)), Gdiplus::PointF(X(10.6f), Y(17.8f)));
-        p.AddLine(Gdiplus::PointF(X(10.6f), Y(17.8f)), Gdiplus::PointF(X(6.8f), Y(14.2f)));
-        p.AddLine(Gdiplus::PointF(X(6.8f), Y(14.2f)), Gdiplus::PointF(X(4), Y(14.2f)));
-        p.CloseFigure();
-        g.DrawPath(&pen, &p);
-        g.DrawArc(&pen, X(12.0f), Y(9.0f), 3.4f * k, 3.4f * k, -55, 110);
-        g.DrawArc(&pen, X(13.4f), Y(7.2f), 5.8f * k, 5.8f * k, -50, 100);
+        // 耳机：头梁 + 两个实心耳罩，和面板上的声卡图标同一套形状。
+        g.DrawArc(&pen, X(4.0f), Y(4.2f), 16 * k, 16 * k, 197, 146);
+        Gdiplus::Color ac;
+        pen.GetColor(&ac);
+        Gdiplus::SolidBrush acb(ac);
+        Gdiplus::GraphicsPath lp, rp;
+        UiRoundRectPath(lp, X(3.4f), Y(11.6f), 3.8f * k, 6.6f * k, 1.7f * k);
+        UiRoundRectPath(rp, X(16.8f), Y(11.6f), 3.8f * k, 6.6f * k, 1.7f * k);
+        g.FillPath(&acb, &lp);
+        g.FillPath(&acb, &rp);
         break;
     }
     case UI_PLUG:
@@ -589,11 +588,12 @@ static void UiSectionTag(const UiRow& row, int diskCount, int netCount,
     } else if (row.icon == ICON_DISK && diskCount > 1) {
         WPrintf(out, cch, L"%d 块", diskCount);
     } else if (row.icon == ICON_BATTERY) {
+        // 标题已经带当前电量，徽标就别再只写一个百分数，容易和电量混淆。
         for (int d = 0; d < row.detailCount; d++) {
             int n = SplitDetail(row.details[d], parts, 12);
             for (int i = 0; i < n; i++)
                 if (wcscmp(parts[i].label, L"健康度") == 0)
-                    wcsncpy_s(out, cch, parts[i].value, _TRUNCATE);
+                    WPrintf(out, cch, L"健康度 %s", parts[i].value);
         }
     } else if (row.icon == ICON_NET && netCount > 1) {
         WPrintf(out, cch, L"%d 个适配器", netCount);
