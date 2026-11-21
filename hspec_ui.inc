@@ -723,7 +723,7 @@ static float UiDrawSection(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             float pw = UiKvWidth(items[k].p, s, keyW);
             SText(g, items[k].p.label, 12, FW_NORMAL, u.t50, light, cx, yy,
                 keyW * s - 6 * s, kUiLineH * s,
-                DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+                DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
             Gdiplus::Pen sep(u.line, 1.0f);
             float sx = cx + keyW * s;
             g.DrawLine(&sep, sx, yy + 5 * s, sx, yy + kUiLineH * s - 5 * s);

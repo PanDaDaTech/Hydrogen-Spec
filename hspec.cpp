@@ -2502,7 +2502,9 @@ static void BuildModel(void)
     int cores = GetPhysicalCores();
     int threads = GetLogicalCpus();
 
-    UiRow* r = ModelAddRow(ICON_CPU, cpuBrand[0] ? cpuBrand : L"处理器");
+    wchar_t cpuTitle[256];
+    WPrintf(cpuTitle, 256, L"处理器：%s", cpuBrand[0] ? cpuBrand : L"—");
+    UiRow* r = ModelAddRow(ICON_CPU, cpuTitle);
     if (cores > 0) {
         wchar_t d[32];
         WPrintf(d, 32, L"%d", cores);
