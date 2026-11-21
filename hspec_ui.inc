@@ -1685,7 +1685,7 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     // ---- 项目地址：两行链接，右侧各一个跳转按钮 ----
     {
-        const float rowH = 46 * s;
+        const float rowH = 40 * s;
         float h = padY * 2 + 24 * s + rowH * 2;
         UiCard(g, u, Gdiplus::RectF(x, cy, w, h), s);
         SText(g, L"项目地址", 13.5f, FW_NORMAL, u.deepText, light, x + padX,
@@ -1693,22 +1693,16 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
         float ry = cy + padY + 24 * s;
         const float bw = 32 * s;
-        struct LinkRow { const wchar_t* title; const wchar_t* sub; UiIcon icon; int act; };
+        struct LinkRow { const wchar_t* title; UiIcon icon; int act; };
         const LinkRow rows[2] = {
-            { L"仓库地址", L"github.com/PanDaDaTech/Hydrogen-Spec", UI_GITHUB, ACT_GITHUB },
-            { L"博客地址", L"pandadatech.cn", UI_NET, ACT_BLOG },
+            { L"仓库地址", UI_GITHUB, ACT_GITHUB },
+            { L"博客地址", UI_NET, ACT_BLOG },
         };
         for (int i = 0; i < 2; i++) {
             float y0 = ry + i * rowH;
-            SText(g, rows[i].title, 12.5f, FW_NORMAL, u.t75, light, x + padX, y0 + 2 * s,
-                200 * s, 18 * s);
-            SText(g, rows[i].sub, 11, FW_NORMAL, u.primary, light, x + padX, y0 + 21 * s,
-                420 * s, 16 * s);
-            {
-                // 链接文字本身也可点：命中区跟着文字宽度走。
-                float lw = UiTextW(rows[i].sub, 11) + 4 * s;
-                UiHitScreen(x + padX, y0 + 19 * s, lw, 20 * s, rows[i].act);
-            }
+            // 不显示地址本身，只留一行标题和一个跳转按钮。
+            SText(g, rows[i].title, 12.5f, FW_NORMAL, u.t75, light, x + padX,
+                y0 + (rowH - 18 * s) * 0.5f, w - padX * 2 - bw - 16 * s, 18 * s);
             UiIconButton(g, u, x + w - padX - bw, y0 + (rowH - bw) * 0.5f, bw, bw,
                 rows[i].icon, 16 * s, g_setHot == rows[i].act, rows[i].act,
                 u.btnRegular, u.t60);
