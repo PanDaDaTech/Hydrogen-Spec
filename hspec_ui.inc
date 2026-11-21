@@ -762,7 +762,8 @@ static void PageHwUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
 
     // 摘要三卡
     const float gap = 12 * s;
-    const float sumH = 64 * s;
+    const float sumH = 76 * s;
+    const float chipSz = 40 * s;
     const float cw = (w - gap * 2) / 3;
 
     wchar_t model[256] = { 0 };
@@ -804,14 +805,18 @@ static void PageHwUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     for (int i = 0; i < 3; i++) {
         Gdiplus::RectF rc(x + (cw + gap) * i, y, cw, sumH);
         FillRound(g, rc, 16 * s, u.card);
-        UiChip(g, u, rc.X + 16 * s, rc.Y + (sumH - 38 * s) * 0.5f, 38 * s, 11 * s,
-            sums[i].icon, 21 * s);
-        float tx = rc.X + 16 * s + 38 * s + 12 * s;
+        UiChip(g, u, rc.X + 16 * s, rc.Y + (sumH - chipSz) * 0.5f, chipSz, 11 * s,
+            sums[i].icon, 22 * s);
+        float tx = rc.X + 16 * s + chipSz + 12 * s;
         float tw = rc.GetRight() - 14 * s - tx;
-        SText(g, sums[i].cap, 11.5f, FW_NORMAL, u.t40, light, tx, rc.Y + 11 * s, tw, 15 * s);
-        SText(g, sums[i].value, 13.5f, FW_NORMAL, u.deepText, light, tx, rc.Y + 27 * s, tw, 18 * s);
-        if (sums[i].sub && sums[i].sub[0])
-            SText(g, sums[i].sub, 11, FW_NORMAL, u.t40, light, tx, rc.Y + 45 * s, tw, 14 * s);
+        // 文字块整体垂直居中：有副标题时三行，没有时两行。
+        bool hasSub = sums[i].sub && sums[i].sub[0];
+        float blockH = hasSub ? 47 * s : 32 * s;
+        float ty = rc.Y + (sumH - blockH) * 0.5f;
+        SText(g, sums[i].cap, 11.5f, FW_NORMAL, u.t40, light, tx, ty, tw, 15 * s);
+        SText(g, sums[i].value, 13.5f, FW_NORMAL, u.deepText, light, tx, ty + 15 * s, tw, 18 * s);
+        if (hasSub)
+            SText(g, sums[i].sub, 11, FW_NORMAL, u.t40, light, tx, ty + 33 * s, tw, 14 * s);
     }
 
     float y2 = y + sumH + 16 * s;

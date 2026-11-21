@@ -1545,7 +1545,7 @@ struct Config
 };
 
 static Config g_cfg = {
-    THEME_PLAIN, 1, 250, 80, 4,    // theme / hueFollow / hue / opacity / radius
+    THEME_PLAIN, 1, 250, 65, 5,    // theme / hueFollow / hue / opacity / radius
     1, 1, 1, 1, 1, 1, 1,           // cpu board mem disk gpu npu net
     1, 1, 1, 1,                    // monitor battery audio ports
     0, 0, 0,                       // lightMode / posDx / posDy
@@ -3909,10 +3909,11 @@ static bool RenderInternal(void)
             DrawPanelShadow(g, rowCard, rowRadius);
             DrawPanelCard(g, rowCard, rowRadius, pal);
         }
+        // 图标和标题同一行：芯片在标题行里垂直居中即可，整块居中会让标题浮起来。
+        float chipY = y + ((float)g_titleH - (float)g_chipSize) * 0.5f;
         if (card) {
             // Tinted chip behind the glyph, like the theme's btn-regular-bg.
-            Gdiplus::RectF chip(cardRect.X + g_padX,
-                y + ((float)g_titleH - (float)g_chipSize) * 0.5f,
+            Gdiplus::RectF chip(cardRect.X + g_padX, chipY,
                 (float)g_chipSize, (float)g_chipSize);
             Gdiplus::GraphicsPath cp;
             AddRoundRect(cp, chip, (float)g_chipSize * 0.3f);
@@ -3928,8 +3929,7 @@ static bool RenderInternal(void)
             // 只是底半透明，仍然压在壁纸上。
             float iconY = y + ((float)g_titleH - (float)g_iconSize) * 0.5f;
             float cs = (float)g_chipSize;
-            Gdiplus::RectF chip((float)(g_cardMargin + g_padX),
-                y + ((float)g_titleH - cs) * 0.5f, cs, cs);
+            Gdiplus::RectF chip((float)(g_cardMargin + g_padX), chipY, cs, cs);
             Gdiplus::GraphicsPath cp;
             AddRoundRect(cp, chip, cs * 0.3f);
             Gdiplus::Color chipFill = pal.chipBg;
