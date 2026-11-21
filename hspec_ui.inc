@@ -1621,19 +1621,15 @@ static void PageAboutUi(Gdiplus::Graphics& g, const UiStyle& u, bool light,
     float x, float y, float w, float s)
 {
     float cx = x + w * 0.5f;
-    float cy = y + 44 * s;
-
-    // 品牌块：无论有没有位图都先铺一层淡品牌色圆角底，
-    // 这样关于页看起来是「应用图标」，而不是一枚漂在页面上的显示器。
-    Gdiplus::RectF tile(cx - 37 * s, cy, 74 * s, 74 * s);
-    FillRound(g, tile, 20 * s, UiClr(u.primary, 26));
+    float cy = y + 34 * s;
 
     Gdiplus::Bitmap* logo = light ? g_logoDark : g_logoLight;
+    Gdiplus::RectF tile(cx - 37 * s, cy, 74 * s, 74 * s);
     if (logo && logo->GetLastStatus() == Gdiplus::Ok) {
-        // 图标自带紫色底板，按整块 74dp 铺，不再叠一层浅色方底
-        g.DrawImage(logo, Gdiplus::RectF(cx - 37 * s, cy, 74 * s, 74 * s));
-        cy += 74 * s + 16 * s;
+        // 图标自带紫色底板，整块铺满，不再垫任何底色
+        g.DrawImage(logo, Gdiplus::RectF(cx - 32 * s, cy + 5 * s, 64 * s, 64 * s));
     } else {
+        FillRound(g, tile, 20 * s, UiClr(u.primary, 26));
         DrawUiIcon(g, UI_GPU, UiCX(tile), UiCY(tile), 38 * s, u.primary);
     }
     cy += 74 * s + 16 * s;

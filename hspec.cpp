@@ -6326,15 +6326,17 @@ static void LoadLogoBitmaps(void)
         AddRoundRect(tp, tr, 15.0f);
         g.FillPath(&tile, &tp);
 
-        Gdiplus::Pen pen(Gdiplus::Color(255, 255, 255, 255), 3.4f);
+        // 与 winres/hspec.ico 完全同一套比例：字形占 50% 画布，24 网格 4.6..19.4，
+        // 描边 5%，8 根引脚各 2.2 格。
+        const float U = (float)size;
+        auto GX = [&](float v) { return U * (0.5f + (v - 12.0f) / 24.0f * 0.50f); };
+        Gdiplus::Pen pen(Gdiplus::Color(255, 255, 255, 255), (Gdiplus::REAL)(U * 0.050f));
         pen.SetLineJoin(Gdiplus::LineJoinRound);
-        // chip body: 24-grid 4.6..19.4 mapped to 10..54
-        auto GX = [&](float v) { return 10.0f + (v - 4.6f) / 14.8f * 44.0f; };
         Gdiplus::GraphicsPath body;
-        AddRoundRect(body, Gdiplus::RectF(GX(4.6f), GX(4.6f), GX(19.4f) - GX(4.6f), GX(19.4f) - GX(4.6f)), 4.0f);
+        AddRoundRect(body, Gdiplus::RectF(GX(4.6f), GX(4.6f), GX(19.4f) - GX(4.6f), GX(19.4f) - GX(4.6f)), U * 0.055f);
         g.DrawPath(&pen, &body);
-        Gdiplus::RectF inner(GX(9.4f), GX(9.4f), GX(14.6f) - GX(9.4f), GX(14.6f) - GX(9.4f));
-        g.DrawRectangle(&pen, inner);
+        Gdiplus::Pen inner(Gdiplus::Color(255, 255, 255, 255), (Gdiplus::REAL)(U * 0.025f));
+        g.DrawRectangle(&inner, Gdiplus::RectF(GX(9.6f), GX(9.6f), GX(14.4f) - GX(9.6f), GX(14.4f) - GX(9.6f)));
         for (int i = 0; i < 2; i++) {
             float y = (i == 0) ? GX(8.6f) : GX(15.4f);
             g.DrawLine(&pen, GX(2.4f), y, GX(4.6f), y);
