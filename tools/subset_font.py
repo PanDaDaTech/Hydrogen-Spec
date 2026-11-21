@@ -39,6 +39,9 @@ SRC = ROOT / "hspec.cpp"
 # The shell UI lives in an include file; its literals need the same coverage.
 SRC_EXTRA = ROOT / "hspec_ui.inc"
 HARDWARE = ROOT / "tools" / "hardware_words.txt"
+# 运行期才会出现的字（用户名、目录名、设备型号）发现了就追加到这个文件，
+# 不要把整个常用字库塞进来——那会把 exe 撑大三倍。
+EXTRA = ROOT / "tools" / "extra_chars.txt"
 
 TTF_OUT = ROOT / "winres" / "MiSans-Medium.ttf"
 TTF_FULL = ROOT / "build" / "font-backup" / "MiSans-Medium.ttf"
@@ -139,7 +142,8 @@ def collect(include_hardware):
         chars |= source_chars(SRC_EXTRA.read_text(encoding="utf-8", errors="replace"))
     if include_hardware:
         chars |= hardware_chars()
-    chars |= gb2312_level1()
+    if EXTRA.exists():
+        chars |= set(EXTRA.read_text(encoding="utf-8", errors="replace"))
     chars -= set("\r\n\t\0")
     return chars
 
@@ -181,6 +185,8 @@ def build(full, out):
 
     font = TTFont(str(full))
     options = subset.Options()
+    # 只保留会被用到的名字记录；UI 里不需要排版特性表与微调表，
+    # 一并丢掉能把内嵌字体压掉约三成（exe 体积跟着降）。
     options.name_IDs = ["*"]
     options.notdef_outline = True
     options.recalc_bounds = True

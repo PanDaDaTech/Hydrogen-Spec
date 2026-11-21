@@ -7337,7 +7337,8 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int)
             for (int i = 1; i < pargc; i++) {
                 if (wcscmp(pargv[i], L"--dump") == 0 ||
                     wcscmp(pargv[i], L"--dump-settings") == 0 ||
-                    wcscmp(pargv[i], L"--dump-menu") == 0) {
+                    wcscmp(pargv[i], L"--dump-menu") == 0 ||
+                    wcscmp(pargv[i], L"--dump-info") == 0) {
                     headlessDump = true;
                     break;
                 }
