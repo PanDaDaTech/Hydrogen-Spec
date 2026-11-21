@@ -144,9 +144,8 @@ def collect(include_hardware):
         chars |= hardware_chars()
     if EXTRA.exists():
         chars |= set(EXTRA.read_text(encoding="utf-8", errors="replace"))
-    # 运行期文本（用户名、目录、设备名、系统版本）编译期枚举不到，只收源码
-    # 字面量的话，系统给出的字会落到别的 CJK 字体上，看起来就像缺字。
-    chars |= gb2312_level1()
+    # 不整库塞 GB2312：只补程序里真正会出现的字。运行期文本（用户名、目录、
+    # 设备名）编译期枚举不到，需要时往 tools/extra_chars.txt 里加单个字。
     chars -= set("\r\n\t\0")
     return chars
 
@@ -193,7 +192,7 @@ def build(full, out):
     options.name_IDs = ["*"]
     options.notdef_outline = True
     options.recalc_bounds = True
-    # 不开 hinting、不要排版特性表：用这点画质换字形覆盖，常用汉字全带上
+    # 不开 hinting、不要排版特性表：换体积。
     # 也不会把 exe 撑成两倍。
     options.hinting = False
     options.layout_features = []
