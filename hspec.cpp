@@ -6522,9 +6522,10 @@ static void PillPlace(void)
     MONITORINFO mi;
     mi.cbSize = sizeof(mi);
     GetMonitorInfoW(MonitorFromPoint(origin, MONITOR_DEFAULTTOPRIMARY), &mi);
-    const int size = 48;
-    int x = mi.rcWork.right - size - 18;
-    int y = mi.rcWork.bottom - size - 18;
+    const float ps = g_dpi / 96.0f;
+    const int size = (int)(48 * ps + 0.5f);
+    int x = mi.rcWork.right - size - (int)(18 * ps);
+    int y = mi.rcWork.bottom - size - (int)(18 * ps);
     SetWindowPos(g_pillHwnd, HWND_TOPMOST, x, y, size, size,
         SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
@@ -6532,7 +6533,8 @@ static void PillPlace(void)
 static void PaintPill(void)
 {
     if (!g_pillHwnd) return;
-    const int size = 48;
+    const float ps = g_dpi / 96.0f;
+    const int size = (int)(48 * ps + 0.5f);
     Gdiplus::Bitmap bmp(size, size, PixelFormat32bppPARGB);
     if (bmp.GetLastStatus() != Gdiplus::Ok) return;
     {
@@ -6541,11 +6543,11 @@ static void PaintPill(void)
         g.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
         g.Clear(Gdiplus::Color(0, 0, 0, 0));
         Gdiplus::GraphicsPath path;
-        UiRoundRectPath(path, 1.0f, 1.0f, size - 2.0f, size - 2.0f, 14.0f);
+        UiRoundRectPath(path, 1.0f, 1.0f, size - 2.0f, size - 2.0f, 14.0f * ps);
         Gdiplus::SolidBrush bg(OklchColor(0.66, 0.15, (double)HueDeg(), 255));
         g.FillPath(&bg, &path);
         g.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-        DrawUiIcon(g, UI_EYE_OFF, size * 0.5f, size * 0.5f, 21.0f,
+        DrawUiIcon(g, UI_EYE_OFF, size * 0.5f, size * 0.5f, 21.0f * ps,
             Gdiplus::Color(255, 255, 255, 255), 1.7f);
     }
 
