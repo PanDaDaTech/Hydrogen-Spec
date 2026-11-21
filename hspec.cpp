@@ -2559,8 +2559,8 @@ static void BuildModel(void)
     int sb = (fw == 2) ? GetSecureBootState() : -1;
     wchar_t boot[128];
     if (fw == 2) {
-        if (sb == 1) wcscpy_s(boot, 128, L"UEFI (Secure Boot)");
-        else if (sb == 0) wcscpy_s(boot, 128, L"UEFI (Secure Boot 关闭)");
+        if (sb == 1) wcscpy_s(boot, 128, L"UEFI (安全启动)");
+        else if (sb == 0) wcscpy_s(boot, 128, L"UEFI (安全启动关闭)");
         else wcscpy_s(boot, 128, L"UEFI");
     } else if (fw == 1) {
         wcscpy_s(boot, 128, L"Legacy BIOS");
@@ -3188,6 +3188,8 @@ static int g_splitPad = 10, g_splitGap = 7;
 // leaves room for the soft shadow, the window size stays identical.
 static int g_cardMargin = 10, g_padX = 18, g_padY = 15, g_chipSize = 30;
 
+static int PanelDetailCount(const UiRow& r) { return r.icon == ICON_NET ? 0 : r.detailCount; }
+
 static bool CardMode(void) { return g_cfg.theme != THEME_PLAIN; }
 // Both remaining card themes (卡片 / 分离卡片) share the translucent
 // blurred-wallpaper background.
@@ -3224,13 +3226,13 @@ static void ComputeLayout(void)
             // cards are separated by rowGap inside a cardMargin frame.
             h = g_cardMargin * 2;
             for (int i = 0; i < g_rowCount; i++) {
-                h += g_splitPad * 2 + g_titleH + g_rows[i].detailCount * g_detailH;
+                h += g_splitPad * 2 + g_titleH + PanelDetailCount(g_rows[i]) * g_detailH;
                 if (i + 1 < g_rowCount) h += g_splitGap;
             }
         } else {
             h = CardMode() ? (g_cardMargin * 2 + g_padY * 2) : g_padTop;
             for (int i = 0; i < g_rowCount; i++)
-                h += g_titleH + g_rows[i].detailCount * g_detailH + g_rowGap;
+                h += g_titleH + PanelDetailCount(g_rows[i]) * g_detailH + g_rowGap;
             if (!CardMode()) h += (int)(4.0 * s + 0.5);
         }
         g_winH = h;
@@ -3515,16 +3517,18 @@ static void DrawGlyph(Gdiplus::Graphics& g, Gdiplus::Pen& pen, int kind,
         break;
     }
     case ICON_AUDIO: {
-        // 耳机轮廓：头梁 + 两个实心耳罩。比喇叭+声波更耐缩小，17px 下也不会糊成一条线。
-        g.DrawArc(&pen, x + 4.0f * u, y + 4.2f * u, 16.0f * u, 16.0f * u, 197.0f, 146.0f);
-        Gdiplus::Color pc;
-        pen.GetColor(&pc);
-        Gdiplus::SolidBrush cupBrush(pc);
-        Gdiplus::GraphicsPath lp, rp;
-        AddRoundRect(lp, Gdiplus::RectF(x + 3.4f * u, y + 11.6f * u, 3.8f * u, 6.6f * u), 1.7f * u);
-        AddRoundRect(rp, Gdiplus::RectF(x + 16.8f * u, y + 11.6f * u, 3.8f * u, 6.6f * u), 1.7f * u);
-        g.FillPath(&cupBrush, &lp);
-        g.FillPath(&cupBrush, &rp);
+        // 喇叭 + 两道声波：保持原来的形状，把它整体右移一点，小尺寸下声波
+        // 不会和喇叭叠在一起。
+        Gdiplus::GraphicsPath p;
+        p.AddLine(x + 4.0f * u, y + 9.4f * u, x + 7.4f * u, y + 9.4f * u);
+        p.AddLine(x + 7.4f * u, y + 9.4f * u, x + 12.2f * u, y + 5.2f * u);
+        p.AddLine(x + 12.2f * u, y + 5.2f * u, x + 12.2f * u, y + 18.8f * u);
+        p.AddLine(x + 12.2f * u, y + 18.8f * u, x + 7.4f * u, y + 14.6f * u);
+        p.AddLine(x + 7.4f * u, y + 14.6f * u, x + 4.0f * u, y + 14.6f * u);
+        p.CloseFigure();
+        g.DrawPath(&pen, &p);
+        g.DrawArc(&pen, x + 13.0f * u, y + 8.6f * u, 4.4f * u, 6.8f * u, -55.0f, 110.0f);
+        g.DrawArc(&pen, x + 13.0f * u, y + 6.4f * u, 8.2f * u, 11.2f * u, -50.0f, 100.0f);
         break;
     }
     case ICON_CLOCK: {
@@ -3892,16 +3896,14 @@ static bool RenderInternal(void)
 
     float y = card ? (float)(g_cardMargin + g_padY) : (float)g_padTop;
     if (split) y = (float)g_cardMargin + (float)g_splitPad;
-    float textX = card
-        ? (float)(g_cardMargin + g_padX + g_chipSize + g_gapX)
-        : (float)(g_iconSize + g_gapX);
+    float textX = (float)(g_cardMargin + g_padX + g_chipSize + g_gapX);
     float textW = (float)g_winW - textX - (float)(card ? g_cardMargin + g_padX : 4.0 * s);
 
     for (int i = 0; i < g_rowCount; i++) {
         UiRow& row = g_rows[i];
         if (split) {
             // Separated card for this section only.
-            float rowH = (float)(g_splitPad * 2 + g_titleH + row.detailCount * g_detailH);
+            float rowH = (float)(g_splitPad * 2 + g_titleH + PanelDetailCount(row) * g_detailH);
             Gdiplus::RectF rowCard((float)g_cardMargin, y - (float)g_splitPad,
                 (float)(g_winW - g_cardMargin * 2), rowH);
             float rowRadius = radius;
@@ -3928,7 +3930,7 @@ static bool RenderInternal(void)
             // 只是底半透明，仍然压在壁纸上。
             float iconY = y + ((float)g_titleH - (float)g_iconSize) * 0.5f;
             float cs = (float)g_chipSize;
-            Gdiplus::RectF chip(2.0f * (float)s - (cs - (float)g_iconSize) * 0.5f,
+            Gdiplus::RectF chip((float)(g_cardMargin + g_padX),
                 y + ((float)g_titleH - cs) * 0.5f, cs, cs);
             Gdiplus::GraphicsPath cp;
             AddRoundRect(cp, chip, cs * 0.3f);
@@ -3967,7 +3969,7 @@ static bool RenderInternal(void)
         DrawTextGdiLine(g, row.title, titlePx, FW_NORMAL, tc, rowLight,
             (int)textX, (int)y, (int)textW, g_titleH);
         y += (float)g_titleH;
-        for (int j = 0; j < row.detailCount; j++) {
+        for (int j = 0; j < PanelDetailCount(row); j++) {
             wchar_t disp[400];
             KvToDisplay(row.details[j], disp, 400);
             if (!card) {
@@ -6499,6 +6501,13 @@ static bool IsFullscreenAppForeground(void)
         return false;
     RECT wr;
     if (!GetWindowRect(fg, &wr)) return false;
+    if (IsIconic(fg)) return false;
+    // 只有前台窗口真的压到面板上才隐藏：在别的窗口里正常操作、没盖住 HSpec
+    // 的时候不该闪一下。
+    RECT pr;
+    if (!g_hwnd || !GetWindowRect(g_hwnd, &pr)) return false;
+    RECT overlap;
+    if (!IntersectRect(&overlap, &wr, &pr)) return false;
     MONITORINFO mi;
     mi.cbSize = sizeof(mi);
     if (!GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mi))
@@ -6807,7 +6816,7 @@ static void DrawTrayItem(const DRAWITEMSTRUCT* d)
                               : Gdiplus::Color(255, 96, 110, 235), 1.7f * s);
         pen.SetStartCap(Gdiplus::LineCapRound);
         pen.SetEndCap(Gdiplus::LineCapRound);
-        float cx = rc.X + 18 * s, cy = rc.Y + rc.Height * 0.5f;
+        float cx = rc.X + 15 * s, cy = rc.Y + rc.Height * 0.5f;
         g.DrawLine(&pen, cx - 3.2f * s, cy, cx - 0.8f * s, cy + 2.4f * s);
         g.DrawLine(&pen, cx - 0.8f * s, cy + 2.4f * s, cx + 4 * s, cy - 3 * s);
     }
@@ -6815,8 +6824,8 @@ static void DrawTrayItem(const DRAWITEMSTRUCT* d)
     Gdiplus::Color tc = dim ? Gdiplus::Color(255, 128, 130, 139)
                             : Gdiplus::Color(255, 233, 234, 238);
     bool darkInk = ((int)tc.GetR() + (int)tc.GetG() + (int)tc.GetB()) < 384;
-    DrawTextGdiLine(g, text, 15, FW_NORMAL, tc, darkInk,
-        (int)(rc.X + 34 * s), (int)rc.Y, (int)(rc.Width - 46 * s), (int)rc.Height,
+    DrawTextGdiLine(g, text, 20, FW_NORMAL, tc, darkInk,
+        (int)(rc.X + 30 * s), (int)rc.Y, (int)(rc.Width - 40 * s), (int)rc.Height,
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
         (double)s);
 }
@@ -6843,10 +6852,10 @@ static bool SaveMenuPng(const wchar_t* path)
     };
 
     const float s = (float)(g_dpi ? g_dpi : 96) / 96.0f;
-    const int W = (int)(244.0f * s);
+    const int W = (int)(248.0f * s);
     int H = (int)(8 * s);
     for (int i = 0; i < (int)(sizeof(kRows) / sizeof(kRows[0])); i++)
-        H += (int)((kRows[i].text ? 40.0f : 12.0f) * s);
+        H += (int)((kRows[i].text ? 38.0f : 11.0f) * s);
 
     BITMAPINFO bi;
     memset(&bi, 0, sizeof(bi));
@@ -6873,7 +6882,7 @@ static bool SaveMenuPng(const wchar_t* path)
 
     int y = (int)(4 * s);
     for (int i = 0; i < (int)(sizeof(kRows) / sizeof(kRows[0])); i++) {
-        int h = (int)((kRows[i].text ? 40.0f : 12.0f) * s);
+        int h = (int)((kRows[i].text ? 38.0f : 11.0f) * s);
         DRAWITEMSTRUCT d;
         memset(&d, 0, sizeof(d));
         d.CtlType = ODT_MENU;
@@ -6911,8 +6920,8 @@ static LRESULT CALLBACK MenuOwnerProc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (mis && mis->CtlType == ODT_MENU) {
             const unsigned dpi = g_dpi ? g_dpi : 96;
             const float ds = (float)dpi / 96.0f;
-            mis->itemHeight = (UINT)((mis->itemData ? 40.0f : 12.0f) * ds);
-            mis->itemWidth = (UINT)(244.0f * ds);
+            mis->itemHeight = (UINT)((mis->itemData ? 38.0f : 11.0f) * ds);
+            mis->itemWidth = (UINT)(248.0f * ds);
             return TRUE;
         }
     } else if (m == WM_DRAWITEM) {
@@ -7100,8 +7109,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         if (m && m->CtlType == ODT_MENU) {
             const unsigned dpi = g_dpi ? g_dpi : 96;
             const float ds = (float)dpi / 96.0f;
-            m->itemHeight = (UINT)((m->itemData ? 34.0f : 10.0f) * ds);
-            m->itemWidth = (UINT)(212.0f * ds);
+            m->itemHeight = (UINT)((m->itemData ? 38.0f : 11.0f) * ds);
+            m->itemWidth = (UINT)(248.0f * ds);
             return TRUE;
         }
         break;

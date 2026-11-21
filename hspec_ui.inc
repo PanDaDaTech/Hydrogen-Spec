@@ -210,16 +210,18 @@ static void DrawUiIcon(Gdiplus::Graphics& g, int icon, float cx, float cy, float
         Line(5.6f, 10.4f, 5.6f, 13.6f); Line(9.2f, 10.4f, 9.2f, 13.6f);
         break;
     case UI_AUDIO: {
-        // 耳机：头梁 + 两个实心耳罩，和面板上的声卡图标同一套形状。
-        g.DrawArc(&pen, X(4.0f), Y(4.2f), 16 * k, 16 * k, 197, 146);
-        Gdiplus::Color ac;
-        pen.GetColor(&ac);
-        Gdiplus::SolidBrush acb(ac);
-        Gdiplus::GraphicsPath lp, rp;
-        UiRoundRectPath(lp, X(3.4f), Y(11.6f), 3.8f * k, 6.6f * k, 1.7f * k);
-        UiRoundRectPath(rp, X(16.8f), Y(11.6f), 3.8f * k, 6.6f * k, 1.7f * k);
-        g.FillPath(&acb, &lp);
-        g.FillPath(&acb, &rp);
+        // 喇叭 + 两道声波，和面板上的声卡图标同一套形状。
+        Gdiplus::GraphicsPath p;
+        p.StartFigure();
+        p.AddLine(Gdiplus::PointF(X(4.0f), Y(9.4f)), Gdiplus::PointF(X(7.4f), Y(9.4f)));
+        p.AddLine(Gdiplus::PointF(X(7.4f), Y(9.4f)), Gdiplus::PointF(X(12.2f), Y(5.2f)));
+        p.AddLine(Gdiplus::PointF(X(12.2f), Y(5.2f)), Gdiplus::PointF(X(12.2f), Y(18.8f)));
+        p.AddLine(Gdiplus::PointF(X(12.2f), Y(18.8f)), Gdiplus::PointF(X(7.4f), Y(14.6f)));
+        p.AddLine(Gdiplus::PointF(X(7.4f), Y(14.6f)), Gdiplus::PointF(X(4.0f), Y(14.6f)));
+        p.CloseFigure();
+        g.DrawPath(&pen, &p);
+        g.DrawArc(&pen, X(13.0f), Y(8.6f), 4.4f * k, 6.8f * k, -55, 110);
+        g.DrawArc(&pen, X(13.0f), Y(6.4f), 8.2f * k, 11.2f * k, -50, 100);
         break;
     }
     case UI_PLUG:
@@ -565,7 +567,6 @@ static int UiKvLines(const UiRow& row, float rowW, float s, float keyW,
         }
     }
     if (used > 0) lines++;
-    if (lines == 0) lines = 1;
     if (wideOut) *wideOut = wide;
     return lines;
 }
