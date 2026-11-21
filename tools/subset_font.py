@@ -115,6 +115,23 @@ def hardware_chars():
     return out
 
 
+def gb2312_level1():
+    """GB2312 一级字库（3755 字）。
+
+    界面里的动态文本（用户名、目录名、保存路径、设备型号）来自系统，编译期
+    不可能枚举，只收集源码字面量就会在运行期落到系统 CJK 字体上——字形和
+    MiSans 不一致，看起来像缺字。把一级常用字整体纳入子集，体积换稳定。
+    """
+    out = set()
+    for hi in range(0xB0, 0xD8):
+        for lo in range(0xA1, 0xFF):
+            try:
+                out.add(bytes([hi, lo]).decode("gb2312"))
+            except UnicodeDecodeError:
+                pass
+    return out
+
+
 def collect(include_hardware):
     chars = {chr(c) for c in range(0x20, 0x7F)}
     chars |= source_chars(SRC.read_text(encoding="utf-8", errors="replace"))
@@ -122,6 +139,7 @@ def collect(include_hardware):
         chars |= source_chars(SRC_EXTRA.read_text(encoding="utf-8", errors="replace"))
     if include_hardware:
         chars |= hardware_chars()
+    chars |= gb2312_level1()
     chars -= set("\r\n\t\0")
     return chars
 

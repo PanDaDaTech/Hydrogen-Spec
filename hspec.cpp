@@ -4186,6 +4186,8 @@ static void AddTrayIcon(HWND hwnd, HINSTANCE inst)
     g_nid.uCallbackMessage = WM_APP + 2;
     int cx = GetSystemMetrics(SM_CXSMICON);
     int cy = GetSystemMetrics(SM_CYSMICON);
+    // 高 DPI 下 SM_CXSMICON 未必是 ico 里存在的尺寸，取 64 让系统做高质量缩放。
+    if (cx < 32) { cx = 64; cy = 64; }
     g_nid.hIcon = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(IDI_MAIN_ICON),
         IMAGE_ICON, cx, cy, 0);
     if (!g_nid.hIcon)
@@ -6431,6 +6433,18 @@ static void OpenSettings(void)
                     &kRound, sizeof(kRound));
             }
         }
+    }
+
+    {
+        // 任务栏按钮用的是窗口的 ICON_BIG；类里没注册图标时它会退到 32px 再放大，
+        // 175% 缩放下就糊。这里显式给 256 / 64 两档，让系统自己挑最接近的尺寸。
+        HINSTANCE inst = GetModuleHandleW(NULL);
+        HICON icoBig = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(IDI_MAIN_ICON),
+            IMAGE_ICON, 256, 256, LR_DEFAULTCOLOR);
+        HICON icoSmall = (HICON)LoadImageW(inst, MAKEINTRESOURCEW(IDI_MAIN_ICON),
+            IMAGE_ICON, 64, 64, LR_DEFAULTCOLOR);
+        if (icoBig) SendMessageW(g_setHwnd, WM_SETICON, ICON_BIG, (LPARAM)icoBig);
+        if (icoSmall) SendMessageW(g_setHwnd, WM_SETICON, ICON_SMALL, (LPARAM)icoSmall);
     }
 
     ShowWindow(g_setHwnd, SW_SHOW);

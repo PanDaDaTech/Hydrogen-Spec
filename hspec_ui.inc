@@ -1214,9 +1214,9 @@ static void UiPreviewPanel(Gdiplus::Graphics& g, const UiStyle& u, bool light,
             rc.Width - 1.5f * s, rc.Height - 1.5f * s, 12 * s);
         Gdiplus::LinearGradientBrush lg(Gdiplus::PointF(rc.X, rc.Y),
             Gdiplus::PointF(rc.GetRight(), rc.GetBottom()),
-            OklchColor(0.70, 0.14, 250, 255), OklchColor(0.70, 0.14, 330, 255));
-        Gdiplus::Color blend[3] = { OklchColor(0.70, 0.14, 250, 255),
-            OklchColor(0.70, 0.14, 300, 255), OklchColor(0.70, 0.14, 345, 255) };
+            OklchColor(0.70, 0.14, HueDeg(), 255), OklchColor(0.70, 0.14, HueDeg() + 40, 255));
+        Gdiplus::Color blend[3] = { OklchColor(0.70, 0.14, HueDeg() - 12, 255),
+            OklchColor(0.70, 0.14, HueDeg() + 12, 255), OklchColor(0.70, 0.14, HueDeg() + 38, 255) };
         Gdiplus::REAL pos[3] = { 0.0f, 0.55f, 1.0f };
         lg.SetInterpolationColors(blend, pos, 3);
         Gdiplus::Pen pen(&lg, 1.6f * s);
